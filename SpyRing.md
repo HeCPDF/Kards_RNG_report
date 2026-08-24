@@ -4,7 +4,7 @@
 
 ## 1. 代码实现：只有一行随机数
 
-`SPY RING`（苏联 Breakthrough 系列，2 kredits，"Add a random Research card to your hand"）的整个效果逻辑在 `ExecuteUbergraph_card_event_spy_ring` 里，核心就是一次范围 `[0, 4]` 的等概率抽签，再用 `switch`-like 的链式比较把结果映射到 5 张固定的国家研究卡之一：
+[`SPY RING`](https://www.kards.com/images/card/v52/en-EN/spy_ring.avif)（苏联 Breakthrough 系列，2 kredits，"Add a random Research card to your hand"，卡图为官方站点链接，非本仓库转载）的整个效果逻辑在 `ExecuteUbergraph_card_event_spy_ring` 里，核心就是一次范围 `[0, 4]` 的等概率抽签，再用 `switch`-like 的链式比较把结果映射到 5 张固定的国家研究卡之一：
 
 ```cpp
 cardFunction->RandomIntFromRangeWithStream(0, 4, /*out*/ randNumber);
@@ -35,7 +35,7 @@ cardFunction->SpawnCardInHandBySide(side, cardToSpawn, cardID, ...);
 
 `RandomIntFromRangeWithStream` → `UKismetMathLibrary::RandomIntegerInRangeFromStream`（一行转发）→ `FRandomStream::RandRange`，最终落到 Unreal 引擎的线性同余生成器（Engine/Public/Math/RandomStream.h）：每次取值前先执行 `Seed = Seed * 196314165 + 907633515 (mod 2^32)`，再用变换后 `Seed` 的**高 23 位**构造 `[0,1)` 浮点数。引擎头文件自己在注释里写明"低位质量很差，不要用取模运算符"——也就是说，Epic 的实现刻意避开了经典 LCG 取模映射的低位相关性缺陷，单次调用的统计质量本身没有问题。这意味着"环形相邻游走"不能简单归因于"对 LCG 输出取模会有相关性"这类笼统说法（这是本文档早期版本的猜测，已根据这一点更正）。
 
-真正能产生"环形游走"结构的位置，是 README.md §2.2 的重播种公式：`seed = match_id + action_id * 19390`。如果间谍组织抽卡时用的正是重播种后的种子（即对局处于 `bUseTurnSwitchValidation == true` 的模式，见 [ReseedImpact.md](ReseedImpact.md)），把这个种子公式代入 LCG 变换会发现：`action_id` 每增加 1，变换后的 `Seed` 就固定增加同一个步长 `Δ = (19390 × 196314165) mod 2^32`——这本身是一个以 `Δ` 为步长的等差数列，跟原始 LCG 的统计性质无关。用这个步长换算到 `RandRange(0,4)` 用到的高位分辨率上，`action_id` 每递增 1，输出结果平均会在环上前进不到 1 格——这正好能解释"下一次结果只会落在原地或相邻位置"这个现象，而且完全不需要假设代码里存在任何显式的"环形状态机"（第 1 节已确认代码里没有）。具体数值见第 5 节。
+真正能产生"环形游走"结构的位置，是 README.md §2.2 的重播种公式：`seed = match_id + action_id * 19390`——真实抓包已经确认对局里这个重播种分支确实是开启的（[evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)）。把这个种子公式代入 LCG 变换会发现：`action_id` 每增加 1，变换后的 `Seed` 就固定增加同一个步长 `Δ = (19390 × 196314165) mod 2^32`——这本身是一个以 `Δ` 为步长的等差数列，跟原始 LCG 的统计性质无关。用这个步长换算到 `RandRange(0,4)` 用到的高位分辨率上，`action_id` 每递增 1，输出结果平均会在环上前进不到 1 格——这正好能解释"下一次结果只会落在原地或相邻位置"这个现象，而且完全不需要假设代码里存在任何显式的"环形状态机"（第 1 节已确认代码里没有）。具体数值见第 5 节。
 
 这个解释框架跟 Weather.md §4.2 是同一套——两张卡用的是同一份原生随机流基础设施，只是消费方式不同（天气三连抽 vs 间谍单抽），所以观察到的"规律形状"也不同，但根源相同。
 
@@ -64,11 +64,11 @@ cardFunction->SpawnCardInHandBySide(side, cardToSpawn, cardID, ...);
 
 ### 5.1 理论代价估算（未经确认，仅供参照）
 
-沿用 Weather.md §4.2 的方法：如果间谍组织的抽签同样发生在 `bUseTurnSwitchValidation == true`、`seed = match_id + action_id * 19390` 重播种之后（且是重播种后的第 1 次变换，`k=1`），代入等差数列步长 `Δ = 1190635094`，换算到 `RandRange(0,4)`（5 分桶）的高位分辨率，预测平均每约 **0.72 次** `action_id` 递增，环上下标就会前进 1 格——数量级上和社区"每 3 次操作出现循环"的观察同属"个位数次操作就会变化"这一档，但不是精确复现。Weather.md §4.2 已经指出，同一套方法应用到天气系统的 2K/4K/6K 三档时，预测值跟 NZ33 实测的代价表对不上（尤其是 2K/4K 应该按不同变换深度表现出不同节奏，但实测两者完全相同）——这说明"小组/环上下标由重播种后单次抽样直接决定"这个最简单的模型本身就有问题，间谍组织这里算出的"0.72 次"同样只能当作一个方向正确、但不能直接当真的估算，不是确认结论。
+沿用 Weather.md §4.2 的方法：间谍组织的抽签发生在 `seed = match_id + action_id * 19390` 重播种之后（重播种确认已开启，见 §3）。假设是重播种后的第 1 次变换（`k=1`），代入等差数列步长 `Δ = 1190635094`，换算到 `RandRange(0,4)`（5 分桶）的高位分辨率，预测平均每约 **0.72 次** `action_id` 递增，环上下标就会前进 1 格——数量级上和社区"每 3 次操作出现循环"的观察同属"个位数次操作就会变化"这一档，但不是精确复现。Weather.md §4.2 已经指出，同一套方法应用到天气系统的 2K/4K/6K 三档时，预测值跟 NZ33 实测的代价表对不上（尤其是 2K/4K 应该按不同变换深度表现出不同节奏，但实测两者完全相同）——这说明"小组/环上下标由重播种后单次抽样直接决定"这个最简单的模型本身就有问题，间谍组织这里算出的"0.72 次"同样只能当作一个方向正确、但不能直接当真的估算，不是确认结论。
 
 ## 6. 结构相同的另一张卡：CONVOY ATTACK（护航攻击/船队袭击）
 
-意大利 `card_event_convoy_attack`（Common，"Deal 0-2 damage to any target."）的实现和间谍组织几乎是同一个模子刻出来的——同样只有一行随机数，直接把结果当数值用，连中间的 switch 映射都省了：
+意大利 [`CONVOY ATTACK`](https://www.kards.com/images/card/v52/en-EN/convoy_attack.avif)（Common，"Deal 0-2 damage to any target."）的实现和间谍组织几乎是同一个模子刻出来的——同样只有一行随机数，直接把结果当数值用，连中间的 switch 映射都省了：
 
 ```cpp
 cardFunction->RandomIntFromRangeWithStream(0, 2, /*out*/ randomResult);
@@ -79,7 +79,7 @@ cardFunction->DamageCard(Event_targetCard, randomResult, cardID, false, false, f
 
 ## 7. 其他被社区验证出类似规律的卡
 
-除间谍组织外，社区反馈还在"反潜巡逻"（反潜）、"死亡俯冲"（死降）、"加压驾驶舱"（加压舱）等卡牌上测试出了同样"结果可预测/可复现"的规律。这些卡具体的候选池结构本文尚未逐一反编译核实，但它们的共同点是：效果里都含有"从若干个候选结果中随机选一个"这一步，而它们无一例外都要经过同一个 `RandomIntFromRangeWithStream` 封装、同一条 `cardsRandomStream`——按第 3 节的解释框架，这些卡出现类似规律并不意外，是同一套底层机制在不同"候选数量/候选顺序"的卡面上的又一次重复验证，而不是各自独立的巧合。
+除间谍组织外，社区反馈还在"反潜巡逻"（反潜）、[`DEATH FROM ABOVE`](https://www.kards.com/images/card/v52/en-EN/death_from_above.avif)（死降，USA，"Destroy a random enemy unit."）、[`PRESSURIZED CABIN`](https://www.kards.com/images/card/v52/en-EN/pressurized_cabin.avif)（加压舱，USA，"Add a B-29 SUPERFORTRESS to hand. Destroy a random enemy unit."）等卡牌上测试出了同样"结果可预测/可复现"的规律。这两张卡已反编译核实，跟间谍组织/护航攻击结构上有一处区别：它们调用的不是 `RandomIntFromRangeWithStream` 直接指定范围，而是 `BP_CardFunctions::GetRandomCard`（`BP_CardFunctions.cpp:5248`）——先拿到敌方场上全部单位的数组，再用 `RandomIntFromRangeWithStream(0, 数组长度-1)` 在数组下标范围内抽一个。也就是说这两张卡的"候选数量"是**动态的**（取决于对方场上有几个单位），不像间谍组织/护航攻击是固定的 5/3——这意味着 Weather.md §4.2/本文 §5.1 那套"固定分桶数换算等效步长"的方法不能直接套用，需要针对具体场面单位数重新推导。反潜巡逻的具体实现尚未反编译核实。这些卡的共同点是：效果里都含有"从若干个候选结果中随机选一个"这一步，而它们无一例外都要经过 `cardsRandomStream`——按第 3 节的解释框架，这些卡出现类似规律并不意外，是同一套底层机制的又一次重复验证，而不是各自独立的巧合。
 
 ## 8. 尚待确认的开放问题
 
@@ -90,6 +90,6 @@ cardFunction->DamageCard(Event_targetCard, randomResult, cardID, false, false, f
 
 ## 9. 另见
 
-- [README.md](README.md) — 核心随机流对象、播种/重播种机制的完整交叉验证。
+- [README.md](README.md) — 核心随机流对象、播种/重播种机制的完整交叉验证、动作类型与提交流程。
 - [Weather.md](Weather.md) — 天气系统的具体实现与同一套机制在另一张卡上的表现。
-- [ReseedImpact.md](ReseedImpact.md) — 如果重播种机制实际是开启的，本文第 5 节的猜想会怎么变。
+- [ReseedImpact.md](ReseedImpact.md) — 重播种机制如何逐条解释每一个已观察到的现象。

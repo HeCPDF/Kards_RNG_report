@@ -88,15 +88,15 @@ public void GetChooseSpawnCards(TArray<UBaseCardObject*>& cards, bool& markAsSee
 
 `heavyWeatherCards`（6K 级）候选池通常比 `lightWeatherCards`（2K 级）小得多——重量级天气效果本身设计的种类就少，且"回合内某张重量级天气正处于场上/冷却"时会被 `GetAllActiveStaticCards` 排除出候选。候选池只剩 1 个成员时，`RandomIntFromRangeWithStream(0, 0)` 不管流内部状态如何变化，返回值永远是下标 `0`——不是没有随机，而是没得选。这解释了一部分"6K 更容易看起来不变"的现象，但不是全部原因；第 4 节给出的确定性代价模型更精确地量化了"要多少次操作才会变"。
 
-## 3. 核心结论：天气结果是确定性序列，理论上可预测
+## 3. 核心结论：天气结果是确定性序列，已由真实抓包证实可预测
 
-结合 README.md §2-§4 交叉验证的原生机制：
+结合 README.md §2-§4 交叉验证的原生机制和真实抓包证据：
 
-1. 全场只有 `match_id` 播种一次（`SetRandomStreamByMatchID`），此后是否按 `action_id` 重播种取决于原生字段 `AMatchControllerV2::bUseTurnSwitchValidation`（native offset `0x7A8`，字段名经游戏自身蓝图数据和运行时反射转储双重确认，详见 [`evidence/bUseTurnSwitchValidation.md`](evidence/bUseTurnSwitchValidation.md)）。这个字段只被读取、从未被赋值——默认值/触发条件写在原生 C++ 里，但只要它是 false，`cardsRandomStream` 就整场只播种一次，之后所有随机效果都在同一条从 `match_id` 确定性生成的序列上按调用顺序连续取值。
-2. 天气预报的三连抽（light→medium→heavy）严格按固定顺序发生，候选池大小、每类天气卡数量都是公开可数的静态信息（活跃卡池全程加载，`GetAllActiveStaticCards` 谁都能枚举）。只要知道这是本场第几次消耗 `cardsRandomStream`，理论上就能反推出结果——这是社区仅凭对局内观测记录、用归纳法就能摸出规律的根本原因：规律确实存在，是代码层面设计如此，不是玄学。
+1. 真实抓包（`本地抓包目录/`）已确认，真实对局里 `AMatchControllerV2::bUseTurnSwitchValidation`（native `+0x7A8`）是**开启**的——对局引导数据明文带着 `"validate_turn_switches":true`（详见 [`evidence/bUseTurnSwitchValidation.md`](evidence/bUseTurnSwitchValidation.md)）。这意味着 `cardsRandomStream` 每次创建/确认一个动作都会重播种为 `match_id + action_id * 19390`，而 `action_id` 是双方共享、从 1 开始逐一递增的简单计数器（详见 [`evidence/action_id-real-capture-sequence.md`](evidence/action_id-real-capture-sequence.md)）。
+2. 天气预报的三连抽（light→medium→heavy）严格按固定顺序发生，候选池大小、每类天气卡数量都是公开可数的静态信息（活跃卡池全程加载，`GetAllActiveStaticCards` 谁都能枚举）。只要知道双方到目前为止一共发生过多少个动作，理论上就能反推出结果——这是社区仅凭对局内观测记录、用归纳法就能摸出规律的根本原因：规律确实存在，是代码层面设计如此，不是玄学。
 3. 官方已于 2026-08-23 就"秋季锦标赛选手利用特定操作控制预报机制结果"发布说明，确认这一现象属实，技术团队和赛事团队正在调查，并将其定性为游戏机制层面的问题，而非外挂/作弊。截至该说明发布，尚未给出具体修复方案或补偿。
 
-天气系统的"伪随机"不是比喻——它是以 `match_id` 为种子、按固定调用顺序推进的确定性伪随机数序列，在 `bUseTurnSwitchValidation == false` 的对局下理论上全程可预测。社区通过对局内可观测行为反推出的规律表，和代码交叉验证出的"同一条流按调用次序消费"完全吻合。
+天气系统的"伪随机"不是比喻——它是以 `match_id` 为种子、按 `action_id` 重播种的确定性伪随机数序列，理论上全程可预测。社区通过对局内可观测行为反推出的规律表，和代码+抓包交叉验证出的机制完全吻合。**唯一仍未确认的一层，是"当前 `action_id`"具体如何映射成天气预报显示的三张卡——见第 4.2 节，这一步的映射公式还没有被独立定位到。**
 
 ## 4. 确定性模型：NZ33「天气操作次数计算器」
 
@@ -145,29 +145,25 @@ Seed'(action_id) = (match_id + action_id * 19390) * 196314165 + 907633515   (mod
 
 ### 4.3 小组编号与真实卡牌对照表
 
-`Content/Blueprints/Cards/Neutral/events/` 下每种天气效果卡都有 3 个版本，文件名后缀（无后缀/2/3）对应上表模型里的小组编号 1/2/3，每张卡的效果文本能和 NZ33 计算器内部的候选数据逐一对上。9 个小组、每组 3 张（晴/雨/风各一张），共 27 张效果卡：
+`Content/Blueprints/Cards/Neutral/events/` 下每种天气效果卡都有 3 个版本，文件名后缀（无后缀/2/3）对应上表模型里的小组编号 1/2/3，每张卡的效果文本能和 NZ33 计算器内部的候选数据逐一对上。9 个小组、每组 3 张（晴/雨/风各一张），共 27 张效果卡（小组 1/4/7 的卡名带官方站点卡图链接，非本仓库转载；小组 2/3/5/6/8/9 版本在官方 API 里用的内部 id 跟 FModel 导出名不是简单的加数字后缀关系，尚未逐一核实，完整已确认清单见 [`evidence/card_image_urls.json`](evidence/card_image_urls.json)）：
 
 | 大组 | 小组 | 晴（Sunny） | 雨（Rain） | 风（Storm） |
 |---|---|---|---|---|
-| 2K | 1 | `sunny2_heatwave` HEATWAVE — 全体+2 攻（空军+3） | `rain2_deluge` DELUGE — 6 点防御随机分配给友方 | `storm2_thunderstorm` THUNDERSTORM — 3 点伤害随机分配给敌方 |
+| 2K | 1 | [`sunny2_heatwave`](https://www.kards.com/images/card/v52/en-EN/heatwave.avif) HEATWAVE — 全体+2 攻（空军+3） | [`rain2_deluge`](https://www.kards.com/images/card/v52/en-EN/deluge.avif) DELUGE — 6 点防御随机分配给友方 | [`storm2_thunderstorm`](https://www.kards.com/images/card/v52/en-EN/thunderstorm.avif) THUNDERSTORM — 3 点伤害随机分配给敌方 |
 | 2K | 2 | `sunny2_heatwave2` HEATWAVE — 己方+1 攻，费用-1 | `rain2_deluge2` DELUGE — 敌方全体-1 攻 | `storm2_thunderstorm2` THUNDERSTORM — 撤退目标及同名单位 |
 | 2K | 3 | `sunny2_heatwave3` HEATWAVE — 本回合部署单位对随机敌人造成等同攻击力的伤害 | `rain2_deluge3` DELUGE — 压制目标单位并抽 1 张牌 | `storm2_thunderstorm3` THUNDERSTORM — 对随机敌方单位造成 5 点伤害 |
-| 4K | 4 | `sunny3_jungle_fever` JUNGLE FEVER — 牌库顶单位加入支援线并钉住 | `rain3_torrential_rain` TORRENTIAL RAIN — 步兵/总部+3 防，其余+2 防 | `storm3_tropical_storm` TROPICAL STORM — 双方洗回手牌再摸等量的牌 |
+| 4K | 4 | [`sunny3_jungle_fever`](https://www.kards.com/images/card/v52/en-EN/jungle_fever.avif) JUNGLE FEVER — 牌库顶单位加入支援线并钉住 | [`rain3_torrential_rain`](https://www.kards.com/images/card/v52/en-EN/torrential_rain.avif) TORRENTIAL RAIN — 步兵/总部+3 防，其余+2 防 | [`storm3_tropical_storm`](https://www.kards.com/images/card/v52/en-EN/tropical_storm.avif) TROPICAL STORM — 双方洗回手牌再摸等量的牌 |
 | 4K | 5 | `sunny3_jungle_fever2` JUNGLE FEVER — 复制一个友方单位加入支援线并钉住 | `rain3_torrential_rain2` TORRENTIAL RAIN — 钉住全部敌方单位 | `storm3_tropical_storm2` TROPICAL STORM — 撤退目标，再摧毁一个随机敌方单位 |
 | 4K | 6 | `sunny3_jungle_fever3` JUNGLE FEVER — 本回合部署/加入的单位+2 攻并获得闪击 | `rain3_torrential_rain3` TORRENTIAL RAIN — 摸 3 张牌后弃 1 张 | `storm3_tropical_storm3` TROPICAL STORM — 对敌人造成 3 点伤害，再对随机敌方单位重复两次（每次-1 伤害） |
-| 6K | 7 | `sunny4_scorching_sun` SCORCHING SUN — 手牌全部单位直接上场并钉住 | `rain4_monsoon_rain` MONSOON RAIN — 双方各移除 2 张手牌/场上最贵的卡 | `storm4_cyclone` CYCLONE — 对敌方全体造成 2 点伤害 |
+| 6K | 7 | [`sunny4_scorching_sun`](https://www.kards.com/images/card/v52/en-EN/scorching_sun.avif) SCORCHING SUN — 手牌全部单位直接上场并钉住 | [`rain4_monsoon_rain`](https://www.kards.com/images/card/v52/en-EN/monsoon_rain.avif) MONSOON RAIN — 双方各移除 2 张手牌/场上最贵的卡 | [`storm4_cyclone`](https://www.kards.com/images/card/v52/en-EN/cyclone.avif) CYCLONE — 对敌方全体造成 2 点伤害 |
 | 6K | 8 | `sunny4_scorching_sun2` SCORCHING SUN — 己方全体+3+3 | `rain4_monsoon_rain2` MONSOON RAIN — 全部单位攻/防/费用设为 2 | `storm4_cyclone2` CYCLONE — 对目标造成 6 点伤害，相邻敌方 2 点 |
 | 6K | 9 | `sunny4_scorching_sun3` SCORCHING SUN — 己方空军攻击力等于费用，之后全体费用清零 | `rain4_monsoon_rain3` MONSOON RAIN — 己方步兵+2+2 并可再次行动 | `storm4_cyclone3` CYCLONE — 全体单位撤退 |
 
 同一行（小组）内晴/雨/风互相切换走"同组代价"；切到下一个小组（组 1→2→3→1，或 4→5→6→4，或 7→8→9→7）走"顺时针代价"；反方向走"逆时针代价"。
 
-### 4.4 早期社区归纳（存档）
-
-早期弹幕/评论区对同一现象的归纳，记法精度不如 4.1-4.3 的模型，存档供参照：观众把 2K、4K 两档天气各自的候选按顺序编号为 A1/A2/A3、B1/B2/B3，6K 编号为 C1/C2/C3；观察到"指令数不超过 2 时约 1/2 概率升一位""指令数大于 3 时 AB 两档同时升一，持续到本回合第 4 次预报"等现象。这些描述本质上是在用更粗糙的记号，摸到了"跨组代价是几"这件事，但没有精确到具体数字。
-
 ## 5. 另见
 
-- [README.md](README.md) — 完整的对局生命周期随机数机制报告（播种时机、重播种触发条件、`cardsRandomStream` 全部已知消费点）。
+- [README.md](README.md) — 完整的对局生命周期随机数机制报告（播种时机、重播种触发条件、`cardsRandomStream` 全部已知消费点、动作类型与提交流程）。
 - [SpyRing.md](SpyRing.md) — 用同一套随机流机制解释"间谍组织"卡的环形分布规律，方法论上和本文互为印证。
-- [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该原生字段的命名更正与证据来源。
-- [ReseedImpact.md](ReseedImpact.md) — 如果重播种机制实际是开启的，本文的结论会怎么变。
+- [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该原生字段的命名更正与真实取值证据。
+- [ReseedImpact.md](ReseedImpact.md) — 重播种机制如何逐条解释每一个已观察到的现象。

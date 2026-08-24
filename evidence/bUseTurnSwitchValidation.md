@@ -60,7 +60,30 @@
 
 这不是"还没找到"，而是可以给出一个具体、合理的解释：UE 的 `UPROPERTY` 默认值，本来就不是通过"某个函数里硬编码 `mov byte ptr [rax+7A8h], 1`"这种方式设置的——UHT 生成的类默认对象（CDO）构造过程，是通过反射系统按 `FProperty` 遍历、用属性自身携带的元数据初始化的；如果这个值还会被配置文件（`.ini`）或服务端下发的对局配置动态覆盖，那也是走一个**通用的、按属性名/`FProperty*` 查找的赋值路径**（同一段代码要能处理成百上千个不同属性，不可能给每个属性各写一条硬编码偏移的赋值指令）。这类"通用反射式赋值"在设计上就是不出现在针对某个具体偏移的 xref 搜索结果里的——所以"静态反汇编搜遍这个二进制,找不到显式赋值点"本身就是这类机制存在时的预期表现，而不是分析没做到位。
 
-**结论**：截至目前，这个开关的值来自 native 反射式默认值/配置系统这一判断,有了三条独立的 IDA 证据支持(exec 函数列表为空、两个"重置"函数都不碰它、结构体字段 xref 为零),不再是单纯的"没找到,所以不知道"。但具体默认值是 true 还是 false、是否按对局类型/`.ini` 配置切换,仍然需要动态调试(运行时下断点读这个字节,或者对比不同对局类型下的 `GObjects` 转拍)才能坐实——这是本文档现在唯一还需要动态手段才能推进的开放问题。
+**结论**：截至目前，这个开关的值来自 native 反射式默认值/配置系统这一判断,有了三条独立的 IDA 证据支持(exec 函数列表为空、两个"重置"函数都不碰它、结构体字段 xref 为零),不再是单纯的"没找到,所以不知道"。具体默认值是 true 还是 false,原本认为只能靠动态调试坐实——但见下一节,已经从真实抓包里直接找到了答案,不再需要动态调试。
+
+## 决定性证据：真实抓包里，服务端直接把这个值原样返回给客户端
+
+`本地抓包目录/` 下两份真实抓包（Fiddler 格式，2026-08-14）里搜索 `validate_turn_switches`（跟原生字段名 `bUseTurnSwitchValidation` 高度对应——去掉 `bUse`/`Validation` 前后缀、复数形式一致），命中两处独立证据，指向同一个结论：
+
+1. **服务端全局远程配置**（app 启动时拉取的功能开关列表，跟 `feature_socketerror_popup_enabled`、`feature_collection_cardhelpcache`、`monitor_battle` 等大量其他 `feature_*`/`enable_*` 开关并列出现在同一个 JSON 对象里）：
+   ```
+   "validate_turn_switches": 1
+   ```
+2. **单局对局创建请求体**（`captures/1_Full.txt`，`POST .../lobbyplayers` 或等价的开局请求）里，客户端自己在 `extra_data` 里显式声明：
+   ```
+   "extra_data": { "match_type": "training", "validate_turn_switches": 1 }
+   ```
+   并且服务端在这局对局的**引导数据响应**（bootstrap，即 `match_and_starting_data` 所在的那个顶层响应体）末尾**原样回显**：
+   ```
+   ...starting_side":"left"}},"validate_turn_switches":true}
+   ```
+
+第 2 条是最强的证据：这不是一个抽象的全局配置项，而是**这一局对局自己的引导数据**里明确带着的字段，值是 `true`。结合第一节确认的"蓝图侧只读，找不到赋值节点"和上一节"native 侧也找不到硬编码赋值点"——这正好对上：这个值不是写死在客户端代码里的常量，而是**由服务端按每局对局下发**，客户端原生代码大概率就是把这个服务端下发的字段，通过反射系统直接写进了 `AMatchControllerV2::bUseTurnSwitchValidation`（这也是为什么静态反汇编搜不到硬编码赋值点——赋值路径是"从网络响应 JSON 按字段名反射写入"，不是"某处代码写死了 0x7A8"）。
+
+**结论（更正为确定性结论）**：这两份真实抓包覆盖的对局（均为 `training`/AI 单机对局）里，`validate_turn_switches` 实际值是 **`true`（开启）**——也就是说，`SetRandomStreamWithActionID` 的重播种分支**在真实对局里是被启用的，不是被跳过的**。README.md §4.1 此前"统一结论"部分假设的"`bUseTurnSwitchValidation == false`、全场只播种一次"这个前提，在这两份真实抓包对应的对局类型下**是不成立的**——需要按这个新证据重新审视 Weather.md/SpyRing.md 里以"从未重播种"为主线的解释，具体影响见 [ReseedImpact.md](../ReseedImpact.md)（已根据这条证据更新其"目前不知道是哪种模式"的结论）。
+
+这条证据目前只覆盖 `match_type: "training"`（人机单机局）；未见到 PvP/天梯/锦标赛对局的抓包，不能排除不同 `match_type` 下这个值不同。
 
 ## 与随机数结论的关系
 

@@ -2,6 +2,8 @@
 
 来源：FModel 反编译的蓝图伪代码（`Content/Blueprints/`），交叉验证部分原生实现（IDA，`kards-Win64-Shipping.exe`）。以下所有行号均指反编译导出的 `.cpp` 伪代码文件。
 
+补充：本文由Claude编写。
+
 ## 1. 核心随机流对象
 
 游戏里跟"对局结果"相关的随机数几乎全部经过两个 `FRandomStream` 实例，都挂在 `BP_CardFunctions`（`cardFunctions`）这个单例上：

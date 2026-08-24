@@ -76,3 +76,4 @@ cardFunction->SpawnCardInHandBySide(side, cardToSpawn, cardID, ...);
 
 - [README.md](README.md) — 核心随机流对象、播种/重播种机制的完整交叉验证。
 - [Weather.md](Weather.md) — 天气系统的具体实现与同一套机制在另一张卡上的表现。
+- [ReseedImpact.md](ReseedImpact.md) — 如果重播种机制实际是开启的，本文第 5 节的猜想会怎么变。

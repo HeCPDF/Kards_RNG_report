@@ -8,6 +8,7 @@
 - 建议阅读[天气系统](Weather.md)，那部分你可能更感兴趣。
 - 用同一套机制解释"间谍组织"卡随机效果里的环形规律，见 [SpyRing.md](SpyRing.md)。
 - `AMatchControllerV2::bUseTurnSwitchValidation`（native `0x7A8`）字段名的命名更正与证据来源，见 [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)。
+- 如果这个开关实际是开启的，社区发现的规律会不会因此失效？见 [ReseedImpact.md](ReseedImpact.md)——结论是不会消失，只是预测所需的自变量会变。
 
 ## 1. 核心随机流对象
 

@@ -116,4 +116,5 @@ public void GetChooseSpawnCards(TArray<UBaseCardObject*>& cards, bool& markAsSee
 
 - [README.md](README.md) — 完整的对局生命周期随机数机制报告（播种时机、重播种触发条件、`cardsRandomStream` 全部已知消费点）。
 - [SpyRing.md](SpyRing.md) — 用同一套随机流机制解释"间谍组织"卡的环形分布规律，方法论上和本文第 3 节互为印证。
-- [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该原生字段的命名更正与证据来源（IDA + Dumper-7 SDK 交叉验证）。
+- [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该原生字段的命名更正与证据来源。
+- [ReseedImpact.md](ReseedImpact.md) — 如果重播种机制实际是开启的，本文的结论会怎么变。

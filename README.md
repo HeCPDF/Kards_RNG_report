@@ -2,7 +2,12 @@
 
 来源：FModel 反编译的蓝图伪代码（`Content/Blueprints/`），交叉验证部分原生实现（IDA，`kards-Win64-Shipping.exe`）。以下所有行号均指反编译导出的 `.cpp` 伪代码文件。
 
-补充：本文由Claude编写。
+补充：
+
+- 本文由Claude编写。
+- 建议阅读[天气系统](Weather.md)，那部分你可能更感兴趣。
+- 用同一套机制解释"间谍组织"卡随机效果里的环形规律，见 [SpyRing.md](SpyRing.md)。
+- `AMatchControllerV2::bUseTurnSwitchValidation`（native `0x7A8`）字段名的命名更正与证据来源，见 [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)。
 
 ## 1. 核心随机流对象
 
@@ -117,3 +122,17 @@ SetRandomStreamWithActionID(receivedAction.action_id);        // 服务端回传
 4. `Array_ShuffleFromStream(localDeckCardIDs, ...)` 客户端洗牌是否只是本地展示/校验用,真正决定抽牌顺序的洗牌是否发生在服务端(如果是纯 REST+action 回放架构,大概率真正权威的牌序来自服务端,客户端这次洗牌可能只是占位/一致性校验)。
 
 以上第 1-3 点需要回到 IDA 里查原生实现或者用录制的对局数据反推验证,目前这份报告只到"蓝图伪代码能看到多远"为止。
+
+## 6. `bUseTurnSwitchValidation` 命名更正(IDA + Dumper-7 SDK 交叉验证)
+
+第 2.2 节提到的 `bUseTurnSwitchValidation`,其原生结构体偏移 `0x7A8` 已经通过 Dumper-7(基于 UE 反射系统的字段名导出,非猜测)确认。此前一版 IDA 手工重建的 `AMatchControllerV2_Layout` 结构体把这个偏移临时命名为占位符 `bDebugMode`,是命名误差,不是字段本身有问题——偏移、`BlueprintReadOnly` 属性都对得上。同时确认:在能拿到的全部反编译蓝图源码里,这个字段只被读取(`BP_OnlineMatch.cpp:24524`、`BP_Board.cpp:4413`、`BP_HandCard.cpp`、`BP_VisualController.cpp` 共 4 处),从未被赋值——赋值来源必然在原生 C++ 侧,目前尚未在静态反汇编里定位到具体赋值点/默认值。完整证据见 [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)。
+
+## 7. 社区争议的结论:这是不是"可控的伪随机"?
+
+2026 年 8 月,社区通过纯对局内实测(不依赖反编译)独立发现:
+
+- 高费(6K)天气预报选项存在明显规律,4K 也有类似现象;且可以通过"部署反制类操作再取消,不实际耗费用"的方式来对齐/控制天气结果的走向(细节与代码层面的解释见 [Weather.md](Weather.md) §3)。
+- "间谍组织"随机加入研究卡的结果之间也存在规律——具体是一个"环形相邻游走"模式(细节与解释见 [SpyRing.md](SpyRing.md))。
+- 官方已于 2026-08-23 发布《关于秋季锦标赛预报机制的说明》,确认"尝试利用特定操作控制预报机制结果"的情况属实,技术团队和赛事团队正在紧急调查,并为此次赛事体验道歉;截至该说明发布,尚未给出具体修复方案或补偿,且将此定性为**游戏机制**层面的问题(而非外挂/作弊)。
+
+把这三条和本报告 §1-§6 的代码交叉验证放在一起,结论是一致的、不需要额外假设:`cardsRandomStream` 是以 `match_id` 为种子的确定性 `FRandomStream`;在 `bUseTurnSwitchValidation` 为 false 的对局里,整场只播种一次,此后所有随机效果都在同一条序列上按调用顺序连续取值;候选池大小、调用顺序、每类效果消耗随机数的次数都是可数的公开信息。也就是说:**在这个模式下,天气预报和间谍组织这类"随机"效果,理论上从对局开始的那一刻起就已经完全确定,只取决于"这是本场第几次消耗这条流"**——这正是社区仅凭对局内观察、用统计归纳法就能摸出规律、乃至据此设计出"零费用控制天气结果"打法的根本原因。这不是玄学,也不是外部工具作弊,是游戏自身伪随机数设计在特定对局模式下退化为确定性序列的直接后果,官方的回应也印证了这一点。

@@ -1,6 +1,6 @@
 # 天气系统：从代码到"可控天气"
 
-来源：FModel 反编译的蓝图伪代码（`Content/Blueprints/`）。行号均指本仓库 `FModel-Exports/` 下对应的反编译导出文件。核心随机流机制（`cardsRandomStream` 的播种/重播种规则）见 [README.md](README.md) §1-§2，本文只讲天气系统本身怎么用这条流。
+来源：FModel 反编译的蓝图伪代码（`Content/Blueprints/`），交叉验证 IDA 反编译的原生实现和 Unreal Engine 5.6 引擎源码。行号均指本仓库 `FModel-Exports/` 下对应的反编译导出文件。核心随机流机制（`cardsRandomStream` 的播种/重播种规则）见 [README.md](README.md) §1-§2，本文只讲天气系统本身怎么用这条流。
 
 ## 1. `BP_CardFunctions` 里跟预报/随机有关的函数
 
@@ -8,18 +8,18 @@
 
 | 函数 | 位置 | 作用 |
 |---|---|---|
-| `RandomIntFromRangeWithStream(min, max, out result)` | `BP_CardFunctions.cpp:12423` | 唯一的随机数入口封装，内部就是一行 `UKismetMathLibrary::RandomIntegerInRangeFromStream(cardsRandomStream, min, max)`。**全游戏所有卡牌**（天气、间谍组织、任何"随机抽一个"效果）都通过这个函数取随机数，没有例外的第二条路径。 |
+| `RandomIntFromRangeWithStream(min, max, out result)` | `BP_CardFunctions.cpp:12423` | 唯一的随机数入口封装，内部就是一行 `UKismetMathLibrary::RandomIntegerInRangeFromStream(cardsRandomStream, min, max)`。全游戏所有卡牌（天气、间谍组织、任何"随机抽一个"效果）都通过这个函数取随机数，没有例外的第二条路径。 |
 | `SetRandomStreamByMatchID(MatchID)` | `BP_CardFunctions.cpp:12339` | 用 `MatchID` 重置 `cardsRandomStream`（详见 README §1）。 |
-| `Forecast(cardTriggeringForecast, out qqq)` | `BP_CardFunctions.cpp:23533` | 玩家打出"天气预报"类卡牌时调用。这个函数本身**不产生随机数**——它只是把三张固定的"一级天气代表卡"（`card_event_sunny1_blue_sky` / `card_event_rain1_mist` / `card_event_storm1_gale`）扔给 UI 弹一个"选择要抽哪张"的面板（`NotifySelectCardToDrawPending`）。真正的随机发生在玩家选中某张代表卡之后，见下一节的 `GetChooseSpawnCards`。 |
-| `GetAllForecastCards(...)` | `BP_CardFunctions.cpp:23084` | 从 `GetAllActiveStaticCards` 里按 `subtype.rain` / `subtype.storm` / `subtype.sunny` 三个 GameplayTag 筛出所有"天气系"卡牌（不分轻重级），是天气选卡候选池的上游数据源之一。 |
+| `Forecast(cardTriggeringForecast, out qqq)` | `BP_CardFunctions.cpp:23533` | 玩家打出"天气预报"类卡牌时调用。这个函数本身不产生随机数——它只是把三张固定的"一级天气代表卡"（`card_event_sunny1_blue_sky` / `card_event_rain1_mist` / `card_event_storm1_gale`）扔给 UI 弹一个"选择要抽哪张"的面板（`NotifySelectCardToDrawPending`）。真正的随机发生在玩家选中某张代表卡之后，见下一节的 `GetChooseSpawnCards`。 |
+| `GetAllForecastCards(...)` | `BP_CardFunctions.cpp:23084` | 从 `GetAllActiveStaticCards` 里按 `subtype.rain` / `subtype.storm` / `subtype.sunny` 三个 GameplayTag 筛出所有天气系卡牌（不分轻重级），是天气选卡候选池的上游数据源之一。 |
 | `GetRandomCard(cards, skipCustomAlways, out randomCard)` | `BP_CardFunctions.cpp:5248` | 通用的"从一堆卡里随机挑一张"，被非天气类效果复用（先检查是否有打了 `AlwaysSelectedAsRandom` 标记的卡，优先在这个子集里随机；否则在全体里随机）。天气选卡没有用这个函数，是各天气代表卡自己实现了一遍三段式抽取（见下）。 |
-| `ShuffleDeckBySide` / `DiscardRandomCardFromHand` / `GiveRandomCombatKeyword` | `BP_CardFunctions.cpp:12351` / `6492` / `22523` | 同样走 `cardsRandomStream`，但跟天气无关，属于洗牌/弃牌/随机赋予关键词，这里不展开，完整列表见 README §3。 |
+| `ShuffleDeckBySide` / `DiscardRandomCardFromHand` / `GiveRandomCombatKeyword` | `BP_CardFunctions.cpp:12351` / `6492` / `22523` | 同样走 `cardsRandomStream`，但跟天气无关，属于洗牌/弃牌/随机赋予关键词，完整列表见 README §3。 |
 
 ## 2. 天气卡怎么实现：以 `card_event_sunny1_blue_sky`（"将是晴天"）为例
 
-天气系统的卡牌全部放在 `Content/Blueprints/Cards/Neutral/events/` 下，命名规律是 `card_event_<天气类型><级别>_<卡名>`（`sunny1`=一级晴天代表卡，`sunny2_heatwave`=晴天的二级效果卡……以此类推，`rain`/`storm` 同理）。这些卡**全部位于"活跃卡池"（Active Static Cards），运行时全程被加载**——不是打出来才实例化，而是每一局开始就作为场上常驻的静态对象存在，随时可以被 `GetAllActiveStaticCards()` 枚举到。
+天气系统的卡牌全部放在 `Content/Blueprints/Cards/Neutral/events/` 下，命名规律是 `card_event_<天气类型><级别>_<卡名>`（`sunny1`=一级晴天代表卡，`sunny2_heatwave`=晴天的二级效果卡……以此类推，`rain`/`storm` 同理）。这些卡全部位于"活跃卡池"（Active Static Cards），运行时全程被加载——不是打出来才实例化，而是每一局开始就作为场上常驻的静态对象存在，随时可以被 `GetAllActiveStaticCards()` 枚举到。
 
-### 2.1 每张子天气卡怎么"声明"自己是哪一类天气
+### 2.1 每张子天气卡怎么声明自己是哪一类天气
 
 `Ucard_event_sunny1_blue_sky_C` 的 `GameplayTags` 字段：
 
@@ -29,7 +29,7 @@ struct FGameplayTagContainer GameplayTags = FGameplayTagContainer({
 });
 ```
 
-`sunny1_blue_sky` 是"一级代表卡"，本身不带 `subtype.*` 分级标签（它只是 UI 上给玩家选的那三个选项之一）。真正携带分级信息的是各个"效果卡"，例如同目录下的 `card_event_sunny2_heatwave`：
+`sunny1_blue_sky` 是一级代表卡，本身不带 `subtype.*` 分级标签（它只是 UI 上给玩家选的那三个选项之一）。真正携带分级信息的是各个效果卡，例如同目录下的 `card_event_sunny2_heatwave`：
 
 ```cpp
 struct FGameplayTagContainer GameplayTags = FGameplayTagContainer({
@@ -38,37 +38,35 @@ struct FGameplayTagContainer GameplayTags = FGameplayTagContainer({
 });
 ```
 
-即：`subtype.sunny`/`subtype.rain`/`subtype.storm` 标记"哪一种天气"，`subtype.lightWeather`/`subtype.mediumWeather`/`subtype.heavyWeather` 标记"轻/中/重（对应俗称的 2K/4K/6K）级别"。天气系统靠遍历全部活跃卡、按这两组标签分类，而不是靠一张写死的表——新增一张天气卡，只要打上正确的标签、丢进 `Neutral/events/` 目录，就会自动被下面这套逻辑收编。
+`subtype.sunny`/`subtype.rain`/`subtype.storm` 标记天气种类，`subtype.lightWeather`/`subtype.mediumWeather`/`subtype.heavyWeather` 标记轻/中/重（对应俗称的 2K/4K/6K）级别。天气系统靠遍历全部活跃卡、按这两组标签分类，而不是靠一张写死的表——新增一张天气卡，只要打上正确的标签、丢进 `Neutral/events/` 目录，就会自动被下面这套逻辑收编。
 
-### 2.2 `GetChooseSpawnCards`：三级天气怎么被随机选出来
+### 2.2 `GetChooseSpawnCards`：三级天气怎么被选出来
 
-真正的随机发生在 `sunny1_blue_sky` 自己的 `GetChooseSpawnCards`（`card_event_sunny1_blue_sky.cpp:93-209`），UI 弹出"选择天气"面板时会调用它来决定"轻/中/重三个候选各是谁"：
+UI 弹出"选择天气"面板时，会调用 `sunny1_blue_sky` 自己的 `GetChooseSpawnCards`（`card_event_sunny1_blue_sky.cpp:93-209`）来决定轻/中/重三个候选各是谁：
 
 ```cpp
 public void GetChooseSpawnCards(TArray<UBaseCardObject*>& cards, bool& markAsSeen, bool& keepOrder)
 {
     if (!Array_IsEmpty(_forecastOptions))
     {
-        // 缓存命中：_forecastOptions 一旦非空就直接复用，整个函数直接返回，
-        // 不会再消耗 cardsRandomStream 里的任何新值。
+        // 缓存分支：_forecastOptions 一旦非空就直接复用，本次调用不再消耗 cardsRandomStream
         cards = _forecastOptions;
         markAsSeen = false;
         keepOrder = true;
         return;
     }
 
-    // 缓存未命中：遍历全部"活跃静态卡"，按 GameplayTag 分成三桶
+    // 遍历全部活跃静态卡，按 GameplayTag 分成三桶
     GetAllActiveStaticCards(true, true, /*out*/ allCards);
     for (card : allCards)
     {
-        if (!card.HasTag("subtype.sunny")) continue;              // 只挑晴天系
+        if (!card.HasTag("subtype.sunny")) continue;
         if (card.HasTag("subtype.heavyWeather"))  _heavyWeatherCards.Add(card);
         else if (card.HasTag("subtype.mediumWeather")) _mediumWeatherCards.Add(card);
         else if (card.HasTag("subtype.lightWeather"))  _lightWeatherCards.Add(card);
     }
 
-    // 依次从三个桶里各随机挑一张，顺序固定：light → medium → heavy，
-    // 同一条 cardsRandomStream 连续消耗三次
+    // 依次从三个桶里各随机挑一张，顺序固定：light → medium → heavy
     randomResult = cardFunction->RandomIntFromRangeWithStream(0, _lightWeatherCards.Length - 1);
     _forecastOptions.Add(_lightWeatherCards[randomResult]);
 
@@ -82,39 +80,94 @@ public void GetChooseSpawnCards(TArray<UBaseCardObject*>& cards, bool& markAsSee
 
 要点：
 
-1. **三个 tier 各自独立、等概率地在各自桶内抽一个下标**——不是从全体天气卡里抽，而是"轻/中/重"三次分别抽签，且顺序固定为 light→medium→heavy，共消耗 `cardsRandomStream` 三次。
-2. **`_forecastOptions` 字段在这份代码里从未被清空**：一旦这局这张卡触发过一次 `GetChooseSpawnCards`，往后所有调用只要 `_forecastOptions` 非空就直接复用缓存、不再消费随机流。这是天气选项"点开预报面板结果不变"的第一层原因（缓存命中，压根没走随机）。
-3. `雨（rain）`/`风暴（storm）`系的 `card_event_rain1_mist`、`card_event_storm1_gale` 是同构实现（把 `subtype.sunny` 换成 `subtype.rain`/`subtype.storm`，逻辑一模一样）。
+1. 三个 tier 各自独立地在自己的桶内抽一个下标——不是从全体天气卡里抽，而是轻/中/重三次分别抽签，顺序固定为 light→medium→heavy，共消耗 `cardsRandomStream` 三次。
+2. 字面代码里 `_forecastOptions` 一旦非空就直接复用、不再消费随机流；但实测显示 2K/4K 在同一回合内反复重新预报（不插入其他操作）时结果会变化，只有 6K 大概率保持不变。也就是说，`_forecastOptions` 一定会在某处被清空/重建，只是清空点尚未在反编译代码里定位到——第 4 节给出的确定性模型直接来自实测数据，比这段代码字面上的"永久缓存"更准确。
+3. 雨（rain）/风暴（storm）系的 `card_event_rain1_mist`、`card_event_storm1_gale` 是同构实现（把 `subtype.sunny` 换成 `subtype.rain`/`subtype.storm`，逻辑一模一样）。
 
-### 2.3 桶的大小才是"6K 经常不变、2K/4K 会变"的关键
+### 2.3 候选池大小影响可变性，但不是唯一原因
 
-`heavyWeatherCards`（6K 级）候选池通常比 `lightWeatherCards`（2K 级）小得多——重量级天气效果本身设计的种类就少，且"回合内某张重量级天气正处于场上/冷却"时会被 `GetAllActiveStaticCards` 排除出候选。当某个 tier 的候选池只剩 1 个成员时，`RandomIntFromRangeWithStream(0, 0)` 不管 `cardsRandomStream` 内部状态如何变化，返回值永远是下标 `0`——**这不是没有随机，而是根本没得选**，跟随机数本身是否可预测无关。这解释了"6K 经常纹丝不动、2K/4K 却在变"这种不对称现象：三个 tier 用的是同一条流，但候选池大小完全不同，观察到的"稳定性"差异来自桶大小，不是三个 tier 被区别对待。
+`heavyWeatherCards`（6K 级）候选池通常比 `lightWeatherCards`（2K 级）小得多——重量级天气效果本身设计的种类就少，且"回合内某张重量级天气正处于场上/冷却"时会被 `GetAllActiveStaticCards` 排除出候选。候选池只剩 1 个成员时，`RandomIntFromRangeWithStream(0, 0)` 不管流内部状态如何变化，返回值永远是下标 `0`——不是没有随机，而是没得选。这解释了一部分"6K 更容易看起来不变"的现象，但不是全部原因；第 4 节给出的确定性代价模型更精确地量化了"要多少次操作才会变"。
 
-## 3. 回到社区的核心质疑：天气到底是不是"可控的伪随机"
+## 3. 核心结论：天气结果是确定性序列，理论上可预测
 
-结合 README.md §2-§4 已经交叉验证的原生机制，可以把天气系统的完整因果链拼起来：
+结合 README.md §2-§4 交叉验证的原生机制：
 
-1. 全场只有 `match_id` 播种一次（`SetRandomStreamByMatchID`），此后是否按 `action_id` 重播种取决于原生字段 `AMatchControllerV2::bUseTurnSwitchValidation`（native offset `0x7A8`，字段名已通过 Dumper-7 SDK 反射导出确认，详见 [`evidence/bUseTurnSwitchValidation.md`](evidence/bUseTurnSwitchValidation.md)）。这个字段在全部反编译到的蓝图代码里**只被读取、从未被赋值**——说明它的默认值/触发条件写在原生 C++ 里，蓝图层看不到，但**只要它是 false，`cardsRandomStream` 就整场只播种一次**，之后所有随机效果（天气三连抽、间谍组织抽卡……）都在同一条从 `match_id` 确定性生成的序列上按调用顺序连续取值。
-2. 天气预报的"三连抽"（light→medium→heavy）严格按固定顺序发生，且候选池大小、每类天气卡数量都是公开可数的静态信息（活跃卡池全程加载，`GetAllActiveStaticCards` 谁都能枚举）。也就是说：**只要知道"这是本场第几次消耗 `cardsRandomStream`"，理论上就能反推出结果**——这正是 2026-08-24 那期"逻辑推理就能出"系列视频里，主播用纯粹的实测记录+归纳法（不看任何反编译代码）就能摸出规律的根本原因：规律确实存在，且是代码层面上"设计如此"，不是玄学。
-3. `_forecastOptions` 永不清空的缓存机制，意味着"重复打开预报面板"这个动作本身**不会**推进随机流——但玩家能做的、真正推进流的动作（部署/激活/取消一次反制之类会触发其他随机效果或 `action_id` 计数器的操作）会。社区实测描述的"挂反制→取消反制→不耗费用地控制天气"，符合的正是这条链路：这类操作要么本身不消耗随机数、只是用来"占位"等待其他事件推进 `cardsRandomStream` 的消费位置，要么是以可预测的方式消耗固定数量的随机数——只要打法固定，序列位置就固定，天气结果自然可复现、可"控制"（准确说是"可预判/可对齐"，不是让引擎凭空产生一个你想要的值）。
-4. 官方也已经在 2026-08-23 对"秋季锦标赛选手利用特定操作控制预报机制结果"一事发布说明，明确表态"技术团队和赛事团队正在进行紧急调查"，并把这个现象定性为**游戏机制**层面的问题，而不是外挂/作弊（"卡巴克"）——这与本文和 README 交叉验证出的结论（"确定性伪随机序列 + 可数的候选池 + 玩家可控的推进节奏"）完全吻合：这不是玄学，是可以从代码结构上直接解释、且官方自己也确认"结果可以被特定操作序列控制"的既有事实。截至该说明发出时，官方尚未给出具体修复方案或补偿。
+1. 全场只有 `match_id` 播种一次（`SetRandomStreamByMatchID`），此后是否按 `action_id` 重播种取决于原生字段 `AMatchControllerV2::bUseTurnSwitchValidation`（native offset `0x7A8`，字段名经游戏自身蓝图数据和运行时反射转储双重确认，详见 [`evidence/bUseTurnSwitchValidation.md`](evidence/bUseTurnSwitchValidation.md)）。这个字段只被读取、从未被赋值——默认值/触发条件写在原生 C++ 里，但只要它是 false，`cardsRandomStream` 就整场只播种一次，之后所有随机效果都在同一条从 `match_id` 确定性生成的序列上按调用顺序连续取值。
+2. 天气预报的三连抽（light→medium→heavy）严格按固定顺序发生，候选池大小、每类天气卡数量都是公开可数的静态信息（活跃卡池全程加载，`GetAllActiveStaticCards` 谁都能枚举）。只要知道这是本场第几次消耗 `cardsRandomStream`，理论上就能反推出结果——这是社区仅凭对局内观测记录、用归纳法就能摸出规律的根本原因：规律确实存在，是代码层面设计如此，不是玄学。
+3. 官方已于 2026-08-23 就"秋季锦标赛选手利用特定操作控制预报机制结果"发布说明，确认这一现象属实，技术团队和赛事团队正在调查，并将其定性为游戏机制层面的问题，而非外挂/作弊。截至该说明发布，尚未给出具体修复方案或补偿。
 
-**结论**：天气系统的"伪随机"不是比喻——它就是字面意义上的、以 `match_id` 为种子、按固定调用顺序推进的确定性伪随机数序列，在满足 `bUseTurnSwitchValidation == false`（尚未定位到原生赋值点/默认值，但蓝图代码证实这个分支切实存在且可达）的对局下，理论上全程可预测。社区通过对局内可观测行为（点击次数、操作类型）反推出的"规律表"，和代码交叉验证出的"同一条流按调用次序消费"完全对得上，不需要引入任何额外假设。
+天气系统的"伪随机"不是比喻——它是以 `match_id` 为种子、按固定调用顺序推进的确定性伪随机数序列，在 `bUseTurnSwitchValidation == false` 的对局下理论上全程可预测。社区通过对局内可观测行为反推出的规律表，和代码交叉验证出的"同一条流按调用次序消费"完全吻合。
 
-## 4. 社区归纳出的具体规律表（2026-08-24 弹幕/评论区整理）
+## 4. 确定性模型：NZ33「天气操作次数计算器」
 
-以下内容来自社区观众的实测归纳，本文只做转述和框架性解释，**未逐一反编译验证每个具体的候选序号/桶内顺序**（跟第 2-3 节不同，第 2-3 节的机制描述是直接来自反编译代码的确认结论）。之所以收录，是因为它跟第 2、3 节确认的机制（三个 tier 各自独立按序抽签、桶内顺序固定、不重播种时结果由"这是第几次消费流"唯一决定）在结构上完全吻合，可以看作是"用纯粹的对局内观测，把第 3 节的抽象结论还原成一张可查表"的尝试：
+社区成员 **NZ33** 制作了一个网页小工具《天气操作次数计算器》，把实测规律整理成一套参数化的图论模型，据反馈计算结果准确。本节以这个模型为准。
 
-- 观众把 2K、4K 两档天气各自的候选，按桶内顺序编号为 A1/A2/A3（2K）、B1/B2/B3（4K），每个编号对应晴/雨/风三条效果线里的一个具体效果（例如"A1"这一档，晴对应"+1/-1"效果、雨对应"-1/-1"效果、风对应"撤退"）；6K 档同理编号为 C1/C2/C3。这跟第 2.1-2.2 节确认的"每个 tier 桶里有若干个候选、按下标随机选一个"结构一一对应——A/B/C 就是"桶内下标"，晴/雨/风就是"这个下标对应的具体天气类型"。
-- 观众发现：**如果开预报之前，本回合已经使用的指令数不超过 2，那么下一次预报的编号，有约 1/2 的概率相对当前编号"升一位"**（例如 A2→A3、B2→B3），且"A、B 两档要么同时按同一方向变化、要么其中一档变化会导致下一回合另一档跟着变化"，呈现出观众描述的"当一个序号升降时，另一个下回合必然进行升降"的联动关系。
-- 如果开预报之前本回合已用指令数**大于 3**，A、B 两档编号会同时"升一"，且这个"同时升一"的状态会持续到本回合第 4 次预报为止，之后再回落到"前一次的规律"。
-- 6K（C 档）呈现出一个观众描述为"C1→C2→C3→C1……"的三段循环，且 C2→C3 阶段会让 B 档"回退"一位，具体触发条件被观众描述为"AB 两档编号相等时才能进入 C2"——这类"某个 tier 的转移条件依赖于另一个 tier 当前状态"的现象，如果属实，最可能的解释仍然是"三个 tier 共享同一条 `cardsRandomStream`、按 light→medium→heavy 固定顺序连续消费"（见第 2.2 节代码），而不是天气系统真的实现了"跨 tier 状态机"——因为三次抽签用的是同一条序列上紧邻的三个值，任何"看似跨 tier 关联"的表现，都可能只是"同一个序列位置同时决定了这三次抽签结果"的自然推论,而不是三个 tier 之间真的存在数据依赖。
+### 4.1 模型结构
 
-这套 A/B/C 编号规律，本质上是社区独立地把第 3 节"确定性序列 + 固定桶大小 + 固定调用顺序 ⇒ 结果可查表"的结论,用他们自己的记号系统重新发现了一遍——这也是为什么 Weather.md 和 SpyRing.md 都强调:这类"看似有状态机、有记忆"的规律,根源都可以追溯到同一份原生随机流基础设施,不需要在游戏逻辑层面假设任何额外的、代码里实际不存在的状态。
+每一档天气（2K/4K/6K）是一个大组，大组内部分成 3 个小组、按环形排列；每个小组固定装着 3 个具体效果（晴/雨/风各一个）。从当前效果切换到目标效果所需的操作次数，只取决于两者的相对位置：
+
+| 档位 | 环大小 | 同小组代价 | 顺时针跨组代价 | 逆时针跨组代价 |
+|---|---|---|---|---|
+| 2K | 3 | 15 | 3 | 9 |
+| 4K | 3 | 15 | 3 | 9 |
+| 6K | 3 | 0 | 1 | 2 |
+
+"代价"指：从当前展示的效果切换到目标效果，中间需要发生多少次会推进随机流的操作。6K 的顺时针跨组代价只有 1，几乎任何一次有效操作都足够让它跳到下一个小组；但同一小组内部三个效果之间的切换代价是 0，两次预报之间如果没有发生跨组事件，6K 展示的会一直是同一小组内的效果，看起来像没变。2K/4K 相反：跨组代价是 3，同组代价高达 15，通常需要至少 3 次有效操作才会跳到下一个小组——这正是 2K/4K 在同回合内不插入额外步骤也会变化、只有 6K 大概率保持不变的成因。
+
+### 4.2 从引擎源码解释代价数字的来源
+
+`RandomIntFromRangeWithStream` → `UKismetMathLibrary::RandomIntegerInRangeFromStream`（`Engine/Private/KismetMathLibrary.cpp:1059`，一行转发）→ `FRandomStream::RandRange`（`Engine/Public/Math/RandomStream.h`）。`FRandomStream` 只维护一个 32 位 `Seed`，每次取值都会先执行一次线性同余变换：
+
+```
+Seed = Seed * 196314165 + 907633515   (mod 2^32)
+```
+
+`GetFraction()` 用变换后 `Seed` 的高 23 位构造出 `[0,1)` 之间的浮点数；`RandRange(Min, Max)` 就是 `Min + floor(GetFraction() * (Max - Min + 1))`。引擎头文件自己在注释里写明"低位质量很差，不要用取模运算符"（Very bad quality in the lower bits. Don't use the modulus operator），说明 Epic 刻意只取高位来避开经典 LCG 低位相关性缺陷——单次调用 `RandRange` 的统计质量本身没有问题，"环形代价"这种结构不会从单次抽样的统计特性里自然长出来。
+
+真正可能产生这种结构的位置，是 `SetRandomStreamWithActionID` 的重播种公式（README §2.2）：`seed = match_id + action_id * 19390`。如果小组下标确实由重播种后单次抽样决定，那么把这个种子公式代入线性同余变换：
+
+```
+Seed'(action_id) = (match_id + action_id * 19390) * 196314165 + 907633515   (mod 2^32)
+                  = 常数 + action_id * ((19390 * 196314165) mod 2^32)
+```
+
+也就是说，`action_id` 每增加 1，变换后的 `Seed'` 就固定增加同一个步长 `Δ = (19390 × 196314165) mod 2^32 = 1190635094`，跟原始 LCG 的性质无关——这本身是一个以 `Δ` 为步长的等差数列。`GetChooseSpawnCards` 里 light/medium/heavy 三次抽签是对同一个重播种后的 `Seed'` 连续做三次线性同余变换，也就是分别处于"变换 1 次""变换 2 次""变换 3 次"之后的状态。因为线性同余变换是仿射映射（`f(x) = A·x + C`），两个只相差一个常数 `d` 的种子，变换 `k` 次之后的差值会精确变成 `A^k · d (mod 2^32)`——`C` 在做差时会抵消掉。也就是说，light（第 1 次变换）、medium（第 2 次）、heavy（第 3 次）三个 tier，各自对应的"`action_id` 每 +1，等效种子步长是多少"并不相同：
+
+| 变换次数 k（对应 tier） | 等效步长 `Δ_k = (19390 × 196314165^k) mod 2^32` | 换算成 3 分桶，平均多少次 `action_id` 递增会让桶下标变化 1 |
+|---|---|---|
+| k=1（light/2K，若按抽签顺序对应） | 1190635094 | 约 1.20 次 |
+| k=2（medium/4K） | 1663813582 | 约 0.86 次 |
+| k=3（heavy/6K） | 2854262182 | 约 0.50 次 |
+
+这组精确计算出的数字，跟 NZ33 实测出的代价表对不上，而且对不上的地方本身就是一条有信息量的负面结果：如果 2K 和 4K 真的分别对应 `k=1`、`k=2` 两次不同深度的变换,按上表它们应该有明显不同的"多久变一次"节奏,但 NZ33 的数据显示 **2K 和 4K 的代价完全相同**（都是同组 15、顺时针 3、逆时针 9），只有 6K 独立不同。这排除了"三个 tier 的小组下标都是各自独立、直接对重播种后的流做一次 `RandRange` 抽样"这个最简单的假设——如果真是这样，2K 和 4K 不应该表现出一模一样的节奏。
+
+更可能的解释是：2K 和 4K 的"当前小组下标"共享同一个计算路径或同一个显式计数器（例如两者都读同一个"本回合已使用操作数"之类的整数变量，再做一次简单的取模/查表，而不是分别各自调用一次 `RandomIntFromRangeWithStream`），只有 6K 因为候选池经常退化到只剩 1 个可选项（第 2.3 节），表现出独立的、更小的等效代价。换句话说：`_forecastOptions` 展示给玩家的具体是哪三张卡，很可能不是 `GetChooseSpawnCards` 这段蓝图代码字面呈现的"每次都各自独立抽签"，而是有另一层尚未定位到的逻辑（可能在原生 C++ 侧）先计算出一个"当前小组指针"，再用这个指针去查表——`RandomIntFromRangeWithStream` 本身出现在反编译代码里是真实的，但它计算出的下标是否就是玩家最终看到的那个下标，仍然没有被独立证实。这是本报告目前最明确、也最值得用 IDA 继续追查的开放问题：需要找到"小组指针"实际的存储位置和推进它的代码，而不是停留在对 `FRandomStream` 统计性质的推演上。
+
+### 4.3 小组编号与真实卡牌对照表
+
+`Content/Blueprints/Cards/Neutral/events/` 下每种天气效果卡都有 3 个版本，文件名后缀（无后缀/2/3）对应上表模型里的小组编号 1/2/3，每张卡的效果文本能和 NZ33 计算器内部的候选数据逐一对上。9 个小组、每组 3 张（晴/雨/风各一张），共 27 张效果卡：
+
+| 大组 | 小组 | 晴（Sunny） | 雨（Rain） | 风（Storm） |
+|---|---|---|---|---|
+| 2K | 1 | `sunny2_heatwave` HEATWAVE — 全体+2 攻（空军+3） | `rain2_deluge` DELUGE — 6 点防御随机分配给友方 | `storm2_thunderstorm` THUNDERSTORM — 3 点伤害随机分配给敌方 |
+| 2K | 2 | `sunny2_heatwave2` HEATWAVE — 己方+1 攻，费用-1 | `rain2_deluge2` DELUGE — 敌方全体-1 攻 | `storm2_thunderstorm2` THUNDERSTORM — 撤退目标及同名单位 |
+| 2K | 3 | `sunny2_heatwave3` HEATWAVE — 本回合部署单位对随机敌人造成等同攻击力的伤害 | `rain2_deluge3` DELUGE — 压制目标单位并抽 1 张牌 | `storm2_thunderstorm3` THUNDERSTORM — 对随机敌方单位造成 5 点伤害 |
+| 4K | 4 | `sunny3_jungle_fever` JUNGLE FEVER — 牌库顶单位加入支援线并钉住 | `rain3_torrential_rain` TORRENTIAL RAIN — 步兵/总部+3 防，其余+2 防 | `storm3_tropical_storm` TROPICAL STORM — 双方洗回手牌再摸等量的牌 |
+| 4K | 5 | `sunny3_jungle_fever2` JUNGLE FEVER — 复制一个友方单位加入支援线并钉住 | `rain3_torrential_rain2` TORRENTIAL RAIN — 钉住全部敌方单位 | `storm3_tropical_storm2` TROPICAL STORM — 撤退目标，再摧毁一个随机敌方单位 |
+| 4K | 6 | `sunny3_jungle_fever3` JUNGLE FEVER — 本回合部署/加入的单位+2 攻并获得闪击 | `rain3_torrential_rain3` TORRENTIAL RAIN — 摸 3 张牌后弃 1 张 | `storm3_tropical_storm3` TROPICAL STORM — 对敌人造成 3 点伤害，再对随机敌方单位重复两次（每次-1 伤害） |
+| 6K | 7 | `sunny4_scorching_sun` SCORCHING SUN — 手牌全部单位直接上场并钉住 | `rain4_monsoon_rain` MONSOON RAIN — 双方各移除 2 张手牌/场上最贵的卡 | `storm4_cyclone` CYCLONE — 对敌方全体造成 2 点伤害 |
+| 6K | 8 | `sunny4_scorching_sun2` SCORCHING SUN — 己方全体+3+3 | `rain4_monsoon_rain2` MONSOON RAIN — 全部单位攻/防/费用设为 2 | `storm4_cyclone2` CYCLONE — 对目标造成 6 点伤害，相邻敌方 2 点 |
+| 6K | 9 | `sunny4_scorching_sun3` SCORCHING SUN — 己方空军攻击力等于费用，之后全体费用清零 | `rain4_monsoon_rain3` MONSOON RAIN — 己方步兵+2+2 并可再次行动 | `storm4_cyclone3` CYCLONE — 全体单位撤退 |
+
+同一行（小组）内晴/雨/风互相切换走"同组代价"；切到下一个小组（组 1→2→3→1，或 4→5→6→4，或 7→8→9→7）走"顺时针代价"；反方向走"逆时针代价"。
+
+### 4.4 早期社区归纳（存档）
+
+早期弹幕/评论区对同一现象的归纳，记法精度不如 4.1-4.3 的模型，存档供参照：观众把 2K、4K 两档天气各自的候选按顺序编号为 A1/A2/A3、B1/B2/B3，6K 编号为 C1/C2/C3；观察到"指令数不超过 2 时约 1/2 概率升一位""指令数大于 3 时 AB 两档同时升一，持续到本回合第 4 次预报"等现象。这些描述本质上是在用更粗糙的记号，摸到了"跨组代价是几"这件事，但没有精确到具体数字。
 
 ## 5. 另见
 
 - [README.md](README.md) — 完整的对局生命周期随机数机制报告（播种时机、重播种触发条件、`cardsRandomStream` 全部已知消费点）。
-- [SpyRing.md](SpyRing.md) — 用同一套随机流机制解释"间谍组织"卡的环形分布规律，方法论上和本文第 3 节互为印证。
+- [SpyRing.md](SpyRing.md) — 用同一套随机流机制解释"间谍组织"卡的环形分布规律，方法论上和本文互为印证。
 - [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该原生字段的命名更正与证据来源。
 - [ReseedImpact.md](ReseedImpact.md) — 如果重播种机制实际是开启的，本文的结论会怎么变。

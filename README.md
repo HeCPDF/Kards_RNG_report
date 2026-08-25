@@ -67,11 +67,13 @@ SetRandomStreamWithActionID(receivedAction.action_id);
 
 本地在还没提交动作、`action_id` 还是占位符 `-1` 的阶段，就已经用本地预测的 `GetCurrentActionID()` 抢先重播种（这样天气预报卡面才能在提交前就在 UI 上显示结果）；动作真正提交、服务端确认后，会用真实 `action_id` 再重播种一次。如果本地预测计数器在两次触发之间没有正确自增（比如没有走完一次完整的"创建→提交→确认"闭环），两次重播种会用同一个 `action_id`、种子完全相同，结果自然一样——这解释了"同回合内第二次开发结果一样"这个现象。
 
-### 2.3 `action_id` 本身是什么：双方共享的简单顺序计数器
+### 2.3 `action_id` 其实有两套编号：服务端确认后的权威序列，和本地投机计数器
 
-用真实抓包（两份完整对局，共 63+118 个动作）逐条解密全部提交请求的 `action_id` 字段后确认：**这是双方共享的单一全局计数器，从 1 开始，每次恰好 +1，全程没有观察到任何一次重置、跳过或重复**。跳号只发生在"我方视角看自己提交的动作序列"里，跳过的号码精确对应对手（AI）在两次我方动作之间插入的动作数量——合并双方视角后就是一条完全连续的整数序列。完整数据和方法见 [evidence/action_id-real-capture-sequence.md](evidence/action_id-real-capture-sequence.md)。
+用真实抓包解密全部提交请求的 `action_id` 字段后确认：**服务端最终确认、双方合并后的权威动作日志，是一条从 1 开始、每次恰好 +1、全程没有重置/跳过/重复的连续整数序列**。完整数据和方法见 [evidence/action_id-real-capture-sequence.md](evidence/action_id-real-capture-sequence.md)。
 
-也就是说：预测下一次重播种用的种子，只需要知道**双方到当前为止一共发生过多少个动作**——一个简单、可数的量，不需要理解游戏客户端内部任何复杂的状态机逻辑（原生代码里确实存在一个看起来复杂的动作日志回放状态机 `MatchControllerV2_GetNextAction_Impl`，但那管理的是客户端本地消化/回放已知动作列表的过程，不是这个计数器本身怎么递增）。
+**但这不是客户端提交请求时填的那个数字**。进一步用服务端轮询回包（`PUT /matches/v2/<id>/actions`，服务端按 `min_action_id` 增量返回的已确认动作数组）解密出真实权威序列，逐条跟客户端自己提交的 `action_id` 字段比对后发现：客户端提交时用的 `action_id`，其实是**只数"我方自己已经创建过多少个动作"的本地投机计数器**（对应 §2.2 调用点 A 的 `GetCurrentActionID()`），完全不管对手做了什么、也不去查询对手的动作数量。一份真实对局里，我方提交的 63 个动作，本地填的 `action_id` 就是干净的 `1,2,...,63`；但服务端确认后这些动作的真实编号，随着对手动作在中间插入越来越多，逐渐涨到 `113-117`——到对局末尾，本地计数器和服务端真实编号已经相差 54。完整数据见 [evidence/local-vs-confirmed-action-id.md](evidence/local-vs-confirmed-action-id.md)。
+
+这个区分很重要：**天气预报、间谍组织这类"提交前就能在 UI 上看到预览结果"的效果，用的是调用点 A 的本地投机重播种**——种子里的 `action_id` 是这个只数自己、不管对手的本地计数器，不是服务端最终权威序列。这正是社区仅凭"数自己做了几次操作"就能总结出可复现规律表的根本原因：他们凭直觉抓住的"操作次数"，跟游戏内部驱动预览结果的那个变量，本来就是同一个东西——不需要知道对手做了什么，因为这个变量原本就不管对手做了什么。§2.2 提到的"如果本地预测计数器两次触发之间没有正确自增，两次重播种会用同一个 `action_id`"这个解释依然成立，但不能简单理解成"结果会完全冻结"——具体哪一档天气容易看起来不变、哪一档容易变，取决于 Weather.md §4.1 的代价模型，不是单纯"种子变没变"这个二元判断。
 
 ## 3. 动作类型与提交流程
 
@@ -118,20 +120,28 @@ XActionEndOfTurn       action_id=7
 
 ## 5. `cardsRandomStream` 的已知消费点
 
-| 位置 | 用途 |
-|---|---|
-| `BP_CardFunctions.cpp:12365` | 对局开始时用 `Array_ShuffleFromStream` 打乱 `localDeckCardIDs`（是否是权威洗牌、还是仅本地校验，尚未确认） |
-| `BP_CardFunctions.cpp:5265`/`5325` | 从数组中随机取一张卡（`GetRandomCard`，被多张"随机摧毁/随机选目标"卡复用，例如 [SpyRing.md](SpyRing.md) §6 提到的死降/加压舱） |
-| `BP_CardFunctions.cpp:5422`/`5605` | `Array_ShuffleFromStream`，打乱对方未见卡池/候选选择池 |
-| `BP_CardFunctions.cpp:6618` | 从牌库按 `RandomIntegerInRangeFromStream` 直接抽一张 |
-| `BP_CardFunctions.cpp:22621` | 从一个 Set 转数组后随机取一个 |
-| `card_event_storm1_gale.cpp:148/156/164`（及 sunny/rain 系列同构文件） | 天气预报：依次从 light/medium/heavy 三个候选池各抽一张，顺序固定 |
-| `card_event_spy_ring.cpp` | 间谍组织：一次 `[0,4]` 抽签，映射到 5 张国家研究卡之一 |
-| `card_event_convoy_attack.cpp` | 护航攻击：一次 `[0,2]` 抽签，直接作为伤害数值 |
+**卡牌自身效果触发的消费点**（玩家打出某张具体卡时才会走到）：
+
+| 位置 | 函数 | 用途 |
+|---|---|---|
+| `BP_CardFunctions.cpp:5265`/`5325` | `GetRandomCard(cards, skipCustomAlways, out randomCard)` | 从一组候选卡里随机取一张（先看是否有 `AlwaysSelectedAsRandom` 标记的子集，优先在子集里随机，否则全体随机）；被多张"随机摧毁/随机选目标"卡复用，例如 [SpyRing.md](SpyRing.md) §7 提到的死降/加压舱 |
+| `BP_CardFunctions.cpp:5422`/`5605` | 未定位到调用它的具体外层函数名 | `Array_ShuffleFromStream`，打乱 `oppositeSideUnseenCards`/`possibleChooseCards`（对方未见卡池/候选选择池） |
+| `BP_CardFunctions.cpp:6618` | `SpawnCardInDeckBySide(side, card_name, spawnerID, ..., RandomWithoutShuffle, ...)` | "把卡生成到牌库"类效果的通用实现——`RandomWithoutShuffle` 为真时，直接用 `RandomIntegerInRangeFromStream(0, 牌库长度)` 算出插入位置，不整体洗牌 |
+| `BP_CardFunctions.cpp:22523`（`22621` 是内部调用点） | `GiveRandomCombatKeyword(cardID, instigatorID, out keywordGiven, out success)` | 从一个战斗关键词 Set 转数组后随机取一个赋予目标单位 |
+| `card_event_storm1_gale.cpp:148/156/164`（及 sunny/rain 系列同构文件） | `GetChooseSpawnCards` | 天气预报：依次从 light/medium/heavy 三个候选池各抽一张，顺序固定 |
+| `card_event_spy_ring.cpp` | `ExecuteUbergraph_card_event_spy_ring` | 间谍组织：一次 `[0,4]` 抽签，映射到 5 张国家研究卡之一 |
+| `card_event_convoy_attack.cpp` | `ExecuteUbergraph_card_event_convoy_attack` | 护航攻击：一次 `[0,2]` 抽签，直接作为伤害数值 |
+
+**不依赖具体某张卡、由游戏系统/模式本身触发的消费点**：
+
+| 位置 | 函数 | 用途 |
+|---|---|---|
+| `BP_CardFunctions.cpp:12365` | `ShuffleDeckBySide(sideToShuffle, ...)` | 洗牌，用 `Array_ShuffleFromStream` 打乱 `localDeckCardIDs`（是否是权威洗牌、还是仅本地校验，尚未确认） |
+| `BP_SkirmishMode.cpp:2379/2391/2413/2435` | 未定位到外层函数名（涉及 `brawlCard` 局部变量，推测是"混战"/Brawl 模式的逻辑） | 某个游戏模式下，单位被摧毁后从 `possible_attacker_spawn`/`possible_defender_spawn` 候选池里随机挑一个生成替代单位——**这是本报告目前唯一确认的、不挂在任何具体卡牌效果上、而是游戏模式本身逻辑触发的 `cardsRandomStream` 消费点** |
 
 `encryptionStream` 只确认一个消费点：`BP_CardFunctions.cpp:13932`，`RandomIntegerInRangeFromStream(encryptionStream, 10000, 1000000)` 生成卡牌数值反作弊 XOR 密钥，跟对局结果无关。
 
-> `Content/Blueprints/Effects/`（坦克炮口烟雾、树叶摆动、探照灯等）下的大量 `RandomFloat`/`RandomIntegerInRange` 调用走 UE 全局（未播种、非确定性）RNG，纯视觉表现层，跟本文无关，不列出。
+> `Content/Blueprints/Effects/`（坦克炮口烟雾、树叶摆动、探照灯等）下的大量 `RandomFloat`/`RandomIntegerInRange` 调用走 UE 全局（未播种、非确定性）RNG，纯视觉表现层，跟本文无关，不列出。这份表格是从 `Content/Blueprints/` 全目录搜索 `RandomIntFromRangeWithStream`/`RandomIntegerInRangeFromStream`/`Array_ShuffleFromStream`/`cardsRandomStream` 字面出现位置得到的，理论上覆盖了蓝图层全部消费点；但不能排除原生 C++ 侧还有蓝图看不到的额外消费点（跟 `bUseTurnSwitchValidation` 一样，蓝图导出只能看到蓝图能看到的部分）。
 
 ## 6. 结论：天气预报、间谍组织等"随机"效果是确定性序列
 
@@ -139,9 +149,9 @@ XActionEndOfTurn       action_id=7
 
 - `cardsRandomStream` 是以 `match_id` 为种子的确定性 `FRandomStream`，算法公开（§1）。
 - 真实对局里 `bUseTurnSwitchValidation` 开启，每次动作都会把它重播种为 `match_id + action_id*19390`（§2.2）。
-- `action_id` 是双方共享、从 1 开始逐一递增的简单计数器，没有隐藏复杂度（§2.3）。
+- 服务端最终确认的权威 `action_id` 是双方合并、从 1 开始逐一递增的简单序列；但预报/间谍组织这类提交前就能看到预览的效果，用的是**我方自己的本地投机计数器**——只数我方动作、不管对手，两者是不同的编号（§2.3）。
 
-因此：**天气预报、间谍组织、护航攻击等所有依赖 `cardsRandomStream` 的效果，其结果从对局开始的那一刻起理论上就是完全确定的，只取决于双方到当前为止一共发生过多少个动作**。这不需要额外假设——是这三点已确认事实的直接推论。
+因此：**天气预报、间谍组织、护航攻击等所有依赖 `cardsRandomStream` 的效果，其预览结果从玩家开始操作的那一刻起理论上就是完全确定的，只取决于我方自己到当前为止一共做过多少个动作**。这不需要额外假设——是这三点已确认事实的直接推论。
 
 这正是社区仅凭对局内观察、用统计归纳法就能摸出规律（Weather.md 的 2K/4K/6K 代价表、SpyRing.md 的环形游走+完整周期），乃至据此设计出"零费用控制天气结果"打法的根本原因。官方已于 2026-08-23 发布《关于秋季锦标赛预报机制的说明》，确认"尝试利用特定操作控制预报机制结果"属实，将其定性为游戏机制层面的问题，而非外挂/作弊；截至该说明发布，尚未给出具体修复方案或补偿。
 

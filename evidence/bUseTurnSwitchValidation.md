@@ -19,7 +19,7 @@
 
 也顺带排查了另一条路：这个字段有没有对应的原生 `exec*` thunk（`ClassName::exec<FunctionName>` 是 UHT 为 `BlueprintCallable UFUNCTION` 生成的native 调用入口，是真正能反汇编的机器码，不是蓝图字节码）。列出 `AMatchControllerV2` 全部 `exec*` 函数（共 54 个，比如 `execGetCurrentActionID`、`execResetVariables`、`execGetDetailsForDebugGame`、`execSaveCheckpointForDebugGame` 等）逐一核对，**没有任何一个名字里带 `TurnSwitch`/`Validation`**——这是符合预期的空结果：`bUseTurnSwitchValidation` 是纯 `UPROPERTY`（没有 `UFUNCTION` getter/setter），蓝图节点读取它时编译出的是直接按偏移读属性，走 Blueprint 虚拟机解释执行，根本不会生成 `exec*` thunk，所以这条路线在这个字段上必然找不到东西，不是搜索方法有问题。顺手反编译了两个最可能"顺带"提到这个字段的调试类函数（`GetDetailsForDebugGame_Impl` @ `0x144aef4b0`、`SaveCheckpointForDebugGame_Impl` 的 exec 包装 @ `0x144a94bd0`），确认前者是本地 JSON 存档/HTTP 回退加载器，完全不涉及 `0x7A8`。
 
-真正给出确认的，是**你自己用 Dumper-7 对正在运行的游戏进程做的运行时反射转储**：本地 Dumper-7 导出目录下的 `GObjects-Dump-WithProperties.txt`。这份文件不是从 `.exe` 静态反编译出来的，是 Dumper-7 挂进正在跑的游戏进程、直接遍历 `GObjects`/`UClass::PropertyLink` 反射链表导出的——比起我们自己在 IDA 里手动重建的、可能带占位名的结构体，这是更直接的一手证据。搜索命中（完整上下文已存为 [`GObjects-Dump-excerpt-MatchControllerV2.txt`](GObjects-Dump-excerpt-MatchControllerV2.txt)，收录进本仓库）：
+真正给出确认的，是**对正在运行的游戏进程用 Dumper-7 做的运行时反射转储**（`GObjects-Dump-WithProperties.txt`）。这份文件不是从 `.exe` 静态反编译出来的，是 Dumper-7 挂进正在跑的游戏进程、直接遍历 `GObjects`/`UClass::PropertyLink` 反射链表导出的——比起在 IDA 里手动重建的、可能带占位名的结构体，这是更直接的一手证据。搜索命中（完整上下文已存为 [`GObjects-Dump-excerpt-MatchControllerV2.txt`](GObjects-Dump-excerpt-MatchControllerV2.txt)，收录进本仓库）：
 
 ```
 [00000B31] {0x7ff4b3aed440} Class kards.MatchControllerV2
@@ -64,13 +64,13 @@
 
 ## 决定性证据：真实抓包里，服务端直接把这个值原样返回给客户端
 
-本地抓包目录下两份真实抓包（Fiddler 格式，2026-08-14）里搜索 `validate_turn_switches`（跟原生字段名 `bUseTurnSwitchValidation` 高度对应——去掉 `bUse`/`Validation` 前后缀、复数形式一致），命中两处独立证据，指向同一个结论：
+两份真实抓包（Fiddler 格式，2026-08-14）里搜索 `validate_turn_switches`（跟原生字段名 `bUseTurnSwitchValidation` 高度对应——去掉 `bUse`/`Validation` 前后缀、复数形式一致），命中两处独立证据，指向同一个结论：
 
 1. **服务端全局远程配置**（app 启动时拉取的功能开关列表，跟 `feature_socketerror_popup_enabled`、`feature_collection_cardhelpcache`、`monitor_battle` 等大量其他 `feature_*`/`enable_*` 开关并列出现在同一个 JSON 对象里）：
    ```
    "validate_turn_switches": 1
    ```
-2. **单局对局创建请求体**（`captures/1_Full.txt`，`POST .../lobbyplayers` 或等价的开局请求）里，客户端自己在 `extra_data` 里显式声明：
+2. **单局对局创建请求体**（`POST .../lobbyplayers` 或等价的开局请求）里，客户端自己在 `extra_data` 里显式声明：
    ```
    "extra_data": { "match_type": "training", "validate_turn_switches": 1 }
    ```

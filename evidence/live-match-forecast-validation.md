@@ -4,7 +4,7 @@
 
 ## 方法
 
-1. 在这台机器上起一个本地 mitmproxy（`mitmdump -s tools/live_capture_addon.py -p 8082`），系统代理指向 `127.0.0.1:8082`，安装 mitmproxy 的 CA 证书。这个 addon（本地工具目录下的 `tools/live_capture_addon.py`）只做被动观察：拦截 `kards.live.1939api.com` 的 `/actions` 请求/响应，用项目已有的 `wards/matches/_codec.py::decrypt_packet` 实时解密，不修改、不注入、不伪造任何请求。
+1. 在这台机器上起一个本地 mitmproxy（`mitmdump -p 8082`），系统代理指向 `127.0.0.1:8082`，安装 mitmproxy 的 CA 证书。抓包过程只做被动观察：拦截 `kards.live.1939api.com` 的 `/actions` 请求/响应并实时解密，不修改、不注入、不伪造任何请求。
 2. 玩家在真实客户端里正常游玩（人工操作，非自动化/非脚本代打），每次触发天气预报时把弹窗截图发过来；同时 mitmproxy 实时把解密出的 `action_id`/`action_type`/`action_data` 推送过来。
 3. 用截图上的效果文字对照 Weather.md §4.3 的小组表，反推每次预报三档实际展示的下标（0/1/2），再用 README.md §1 已经字节级确认的 LCG 公式、真实 `match_id`，对每个候选 `action_id` 计算 light/medium/heavy 三档下标，找出跟截图完全一致的 `action_id` 取值。
 

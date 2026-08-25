@@ -83,7 +83,7 @@
 
 **结论（更正为确定性结论）**：这两份真实抓包覆盖的对局（均为 `training`/AI 单机对局）里，`validate_turn_switches` 实际值是 **`true`（开启）**——也就是说，`SetRandomStreamWithActionID` 的重播种分支**在真实对局里是被启用的，不是被跳过的**。README.md §4.1 此前"统一结论"部分假设的"`bUseTurnSwitchValidation == false`、全场只播种一次"这个前提，在这两份真实抓包对应的对局类型下**是不成立的**——需要按这个新证据重新审视 Weather.md/SpyRing.md 里以"从未重播种"为主线的解释，具体影响见 [ReseedImpact.md](../ReseedImpact.md)（已根据这条证据更新其"目前不知道是哪种模式"的结论）。
 
-这条证据目前只覆盖 `match_type: "training"`（人机单机局）。这个值是服务端按每局对局下发的字段（第 82 行已确认，不是客户端硬编码常量），所以 PvP/天梯/锦标赛下的取值，只能靠那些对局类型各自的真实抓包确认——这是数据覆盖范围的边界（见 [ReseedImpact.md](../ReseedImpact.md) §4），不是机制本身还有不确定的地方。
+抓包直接覆盖的只有 `match_type: "training"`（人机单机局）。PvP 天梯对局同样启用这个开关，已由持有账号、能直接在天梯对局中核实的本项目所有者确认——不是抓包证据，是直接确认。这个值是服务端按每局对局下发的字段（第 82 行已确认，不是客户端硬编码常量），所以只有 `training`/PvP 天梯之外的赛制（如锦标赛）取值仍未确认，需要那类赛制的真实抓包或直接确认才能补齐（见 [ReseedImpact.md](../ReseedImpact.md) §4）。
 
 ## 与随机数结论的关系
 

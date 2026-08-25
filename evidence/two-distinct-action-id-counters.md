@@ -27,7 +27,7 @@ action_id_value = ++*(this+3228);   // Counter3228，此前证据文件误称为
 
 ## 结论：之前"驱动预览结果的自变量是本地自计数、不管对手"这个结论，证据不足，需要撤回强调述
 
-之前 README.md/ReseedImpact.md 反复强调的"驱动天气预报/间谍组织预览结果的变量，是一个只数我方自己动作、完全不管对手的本地计数器"——这个结论的**实测证据部分**（抓包解密出的 JSON `action_id` 字段确实是这样的行为）依然成立，但**这个实测证据对应的是 `Counter3228`，不是 `CurrentActionId`**，而后者才是真正喂给随机数种子公式的字段。这两个字段是否碰巧总是同步、还是会独立发散，本报告目前没有直接证据。
+之前 README.md/ReseedImpact.md 反复强调的"驱动天气预报/间谍组织预览结果的变量，是一个只数我方自己动作、完全不管对手的本地计数器"——这个结论的**实测证据部分**（抓包解密出的 JSON `action_id` 字段确实是这样的行为）依然成立，但**这个实测证据对应的是 `Counter3228`，不是 `CurrentActionId`**，而后者才是真正喂给随机数种子公式的字段。这两个字段是否碰巧总是同步、还是会独立发散，本报告目前没有直接抓包证据；但 [CurrentActionId-increment-logic.md](CurrentActionId-increment-logic.md) 已经反编译确认 `CurrentActionId` 的推进由 `MatchController_C::ActionsReceived()` 蓝图事件驱动的 `GetNextAction` 消化循环负责，每次客户端处理完一批服务端轮询回包（不区分回包里是己方还是对方的动作）就会把这批里的每一条都消化一遍、逐条推进 `CurrentActionId`——这个行为本身就跟"只数己方动作"的 `Counter3228` 不同，两者按各自反编译出的代码逻辑不是同一个东西，不需要再靠额外抓包去证明它们"是否独立发散"：字段各自的推进规则已经从代码层面确认互相独立，会不会在数值上长期保持同步，取决于对局过程中双方动作数是否恰好相等——这不是需要进一步验证的未知，而是这两条独立规则的直接算术推论。
 
 ## 为什么社区"数自己本回合操作次数"的方法论依然大概率有效：不需要解决上面这个疑问
 
@@ -35,6 +35,6 @@ action_id_value = ++*(this+3228);   // Counter3228，此前证据文件误称为
 
 ## 结论与后续
 
-- **已修正**：JSON 提交包里的 `action_id`（`Counter3228`）和随机数重播种用的 `action_id`（`CurrentActionId`）是原生代码里两个不同的字段，此前文档把两者混为一谈。
-- **仍未确认**：`CurrentActionId` 精确的推进规则（是否真的双方合并、合并的时机/延迟具体如何）——需要进一步反编译 `GetNextAction_Impl` 的调用时机，或者找到能直接观测 `CurrentActionId` 实际取值的途径（比如内存读取/更细致的抓包关联分析）才能坐实。
-- 社区"回合内计数"方法论的有效性，不依赖于解决上面这一点——已在本文单独论证。
+- **已确认**：JSON 提交包里的 `action_id`（`Counter3228`）和随机数重播种用的 `action_id`（`CurrentActionId`）是原生代码里两个不同的字段，此前文档把两者混为一谈，现已分别独立反编译确认各自的推进规则。
+- **已确认**：`CurrentActionId` 的推进时机——由 `MatchController_C::ActionsReceived()` 蓝图事件驱动的 `GetNextAction` 消化循环负责，每次客户端处理完一批服务端轮询回包就会推进，不区分回包内动作的归属方；完整反编译证据见 [CurrentActionId-increment-logic.md](CurrentActionId-increment-logic.md)。
+- 社区"回合内计数"方法论的有效性，不依赖于 `Counter3228`/`CurrentActionId` 是否数值同步——已在本文单独论证。

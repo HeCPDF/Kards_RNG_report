@@ -73,7 +73,7 @@ SetRandomStreamWithActionID(receivedAction.action_id);
 
 客户端提交请求 JSON payload 里填的 `action_id` 字段不是这个权威序列，而是一个只数"我方自己已经构造过多少个提交动作"的本地计数器：一份真实对局里，我方提交的 63 个动作，本地填的 `action_id` 就是干净的 `1,2,...,63`，跟服务端确认后的真实编号（逐渐涨到 113-117）相差越来越远。完整数据见 [evidence/local-vs-confirmed-action-id.md](evidence/local-vs-confirmed-action-id.md)。
 
-**但这个"只数自己"的计数器，反编译确认之后，并不是 `SetRandomStreamWithActionID` 用来重播种的那个字段**：`MatchController_BuildActionJsonPayload`（构造 JSON payload 的原生函数）里，JSON `action_id` 字段来自 `this+3228`（`Counter3228`）；而 `GetCurrentActionID()`／喂给随机数重播种公式的，是另一个字段 `this+3224`（`CurrentActionId`），这个字段由 `GetNextAction_Impl`（本地回放/消化已知动作日志的状态机）推进，推进条件不区分动作属于哪一方——也就是说，它更可能反映"本地客户端已经回放过双方合并动作日志里的第几条"，而不是纯粹的自计数。这两个字段是否总是同步、还是会独立发散，本报告目前没有直接证据坐实，完整讨论见 [evidence/two-distinct-action-id-counters.md](evidence/two-distinct-action-id-counters.md)。
+**但这个"只数自己"的计数器，反编译确认之后，并不是 `SetRandomStreamWithActionID` 用来重播种的那个字段**：`MatchController_BuildActionJsonPayload`（构造 JSON payload 的原生函数）里，JSON `action_id` 字段来自 `this+3228`（`Counter3228`）；而 `GetCurrentActionID()`／喂给随机数重播种公式的，是另一个字段 `this+3224`（`CurrentActionId`），这个字段由 `GetNextAction_Impl`（本地回放/消化已知动作日志的状态机）推进，推进条件不区分动作属于哪一方——反编译 `MatchController.cpp` 的 `ExecuteUbergraph_MatchController` 蓝图字节码进一步确认，`GetNextAction_Impl` 的消化循环由 `MatchController_C::ActionsReceived()` 这个蓝图事件触发，每次客户端处理完一批服务端轮询回包（不区分回包里是己方还是对方提交的动作）就会把这批里全部尚未处理的动作逐条消化、每条都推进一次 `CurrentActionId`——即它反映的是"本地客户端已经回放过双方合并动作日志里的第几条"，不是纯粹的自计数,这一点已经从蓝图字节码直接确认,不再是推测。这两个字段是否恰好总是数值相等，取决于对局过程中双方动作数是否相等——这是各自推进规则的直接算术推论，完整反编译证据见 [evidence/two-distinct-action-id-counters.md](evidence/two-distinct-action-id-counters.md) 和 [evidence/CurrentActionId-increment-logic.md](evidence/CurrentActionId-increment-logic.md)。
 
 即便如此，社区"在自己回合内数操作次数"这套方法论依然大概率有效，不需要先解决上面这个疑问：KARDS 是回合制游戏，轮到我方回合时对手不会插入新动作，只要客户端在我方回合开始前已经把对手上一回合的动作回放同步完毕，那么**在我方回合内部**，不管 `CurrentActionId` 底层是不是纯自计数，它的相对推进量都等于"我方本回合已经做了几次动作"——这跟社区的计数方法完全对得上。§2.2 提到的"如果本地预测计数器两次触发之间没有正确自增，两次重播种会用同一个 `action_id`"这个解释依然成立，但不能简单理解成"结果会完全冻结"——具体哪一档天气容易看起来不变、哪一档容易变，取决于 ReseedImpact.md §1 的模除运算推导，不是单纯"种子变没变"这个二元判断。
 
@@ -161,7 +161,7 @@ XActionEndOfTurn       action_id=7
 
 ## 7. 尚待确认的开放问题（每条都已定性到静态分析能解决/不能解决的边界）
 
-1. **`action_id` → 具体展示结果的精确映射公式**：已证明字面三连抽模型不成立（Weather.md §4.2）；需要运行时读取候选数组内容才能进一步确定，无法只靠反编译解决。
+1. **`action_id` → 具体展示结果的精确映射公式**：已证明字面三连抽模型不成立（Weather.md §4.2）；需要运行时读取候选数组内容才能进一步确定其展示顺序，反编译本身无法直接读出数组元素的值。已把候选数组的排序方式反编译到底：`UFunctionLibrary::SortCardsByName`（`execSortCardsByName` @ `0x144a8ca90`）最终调用的排序核心（`sub_144B14100`，一个通用 introsort）用的比较函数（`sub_14137F890` @ `0x14137F890`）比较的是数组元素（卡片对象指针）偏移 `+0x50`（80）处的一个 `FName` 字段，走的是标准 `FName` 有序比较（`ComparisonIndex` 相等时比较 `Number`，否则调用 `sub_141376EA0` 做跨条目比较）——也就是说，排序键是卡片对象上的一个原生 `FName` 属性，不是本地化展示文本（`FText`）。这把"运行时读数组"这一步的范围从"完全未知"缩小到"确定了排序依据的字段类型和比较方式"；要把这一步彻底走完，还差两件事：①确认这个 `+0x50` 字段在 `UBaseCardObject`（或其父类）里的具体属性名（本报告目前的类型重建里没有覆盖到这个偏移，需要专门针对该类型继续重建）；②枚举全部天气小卡的原始资产名（FModel 已有数据）、用同样的比较规则手工复现排序结果，再与 `GetAllActiveStaticCards` 的过滤条件（cardSet 归属 + tag）交叉，还原出候选数组的真实顺序。这两步都是纯静态工作、不需要动态调试，但工作量超出本轮范围，留作下一步。
 2. **`_forecastOptions` 何时被清空**：已解决（Weather.md §2.2）——它不需要被清空，因为每次触发预报都是全新创建的卡实例，`_forecastOptions` 天然是空的，反编译到 `selectCardToDraw`/`GetChooseSpawnCards` 的调用链已直接证实。
 3. **`Array_ShuffleFromStream(localDeckCardIDs, ...)` 客户端洗牌是否权威**：本报告的反编译范围内没有找到能确认"服务端另有一套权威洗牌"或"客户端洗牌即最终牌序"的直接证据；这类问题本质是"服务端内部实现是什么"，服务端代码不在本报告的静态分析范围内（游戏客户端二进制不包含服务端逻辑），无法通过反编译客户端解决，需要抓包比对客户端预测牌序与服务端实际发牌结果才能确认。
 4. **`bUseTurnSwitchValidation` 在 PvP/天梯/锦标赛下的取值**：本报告现有的两份真实抓包都只覆盖 `match_type: "training"`；这个值由服务端按局下发（evidence/bUseTurnSwitchValidation.md），不写死在客户端代码里，所以无法通过反编译客户端确定其他对局类型下的值，需要那些对局类型的真实抓包才能确认。

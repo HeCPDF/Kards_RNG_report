@@ -26,4 +26,23 @@ ReseedImpact.md 最初的分析里，把 `action_id`（本地投机计数器 `Ge
 
 早期的"二次更正"曾依据抓包解密出的提交请求 `action_id` 字段（从 1 开始、每次恰好 +1、双方共享同一序列）推翻上面反编译出的状态机描述。这个比对本身依据的字段已经查明是错的：[evidence/two-distinct-action-id-counters.md](two-distinct-action-id-counters.md) 反编译 `MatchController_BuildActionJsonPayload` 后确认，提交请求 JSON 里的 `action_id` 字段来自 `Counter3228`（一个只在本机构造新动作时自增、按归属方过滤的独立字段——即本文件第 17 条列出的"只统计自己这方动作数量"的那个平行计数器），不是本文档反编译的 `CurrentActionId`（`this+3224`）。也就是说，抓包能直接验证的是 `Counter3228` 的行为，不能直接验证 `CurrentActionId` 的行为——上面第 5-19 节反编译出的 `GetNextAction_Impl` 状态机描述（按动作类型/归属方条件递增、查不到下一个 slot 时重置为 1、gap 检测）依然是 `CurrentActionId` 唯一已知的直接代码证据，没有被抓包推翻。
 
-`CurrentActionId` 的语义（本机自计数，还是本机回放合并动作日志的进度指针）目前唯一的直接证据就是本文件反编译出的这套状态机本身：第 18 条"哈希表查不到下一个 slot 时重置为 1，随后重建/收缩哈希表"的行为，比"简单自增计数器"更符合"回放游标"这个解释——一个纯自增的己方动作计数器没有理由在某个时刻整体重置并收缩自己依赖的哈希表。`GetNextAction_Impl` 具体在游戏运行的什么时机被触发调用（是每次收到服务端轮询回包后自动触发，还是别的时机），需要追踪它在 `BP_Logic.cpp`/`Logic/MatchController.cpp` 里的调用点确定——这两处调用点的具体触发条件见 [two-distinct-action-id-counters.md](two-distinct-action-id-counters.md) 末尾的后续方向；用字面量常量反查调用点这条路径，在两个候选入口（19805、5308）里只有前者能追到一个仅限调试模式的函数 `loadDebugGameState()`，后者无法用同样方法定位——这是本报告静态分析方法本身的边界：`execGetNextAction` 是一个蓝图可调用的原生导出函数，蓝图侧的调用点分布在庞大的、按状态机跳转表组织的 Ubergraph 里，没有 PDB/符号名的情况下，从原生反编译单独反查"哪个具体的蓝图事件在什么时机调用了它"，需要逐个状态机跳转分支人工核对，超出反编译单个原生函数所能确定的范围。
+`CurrentActionId` 的语义（本机自计数，还是本机回放合并动作日志的进度指针）目前唯一的直接证据就是本文件反编译出的这套状态机本身：第 18 条"哈希表查不到下一个 slot 时重置为 1，随后重建/收缩哈希表"的行为，比"简单自增计数器"更符合"回放游标"这个解释——一个纯自增的己方动作计数器没有理由在某个时刻整体重置并收缩自己依赖的哈希表。
+
+## 触发时机：已定位到具体的蓝图事件
+
+`GetNextAction_Impl` 的调用点 `execGetNextAction`（原生 exec thunk，`_ZN18AMatchControllerV217execGetNextActionEv`，`0x144a94360`）在 IDA 全局交叉引用里**只有两处引用，且都是数据段（反射系统的 `UFunction` 元数据表项）**，没有任何一处原生机器码直接 `call` 它——这是 `BlueprintCallable UFUNCTION` 的正常形态：蓝图虚拟机通过按名字/索引查表分派调用，不生成能被 `xrefs_to` 直接找到的原生 `CALL` 指令；这正是此前反查两个候选入口点（19805、5308）时反查方法本身失效的原因，不是分析没做到位——因为真正的调用点根本不在原生代码里,而是蓝图字节码本身。
+
+改用 FModel 反编译出的蓝图字节码（`Logic/MatchController.cpp`，这是 `AMatchController_C`——`AMatchControllerV2` 的蓝图子类——的完整 `ExecuteUbergraph_MatchController` 反编译）直接定位：入口标签 `Label_5308`（第 482 行）只能通过 `Label_5066` 处的一个条件判断（`isResyncingMatch || (!preStateDone_DoMulligan && bUseActionsForMulligan)` 为假时）用 `goto` 到达（第 465-483 行），本身不是任何蓝图事件的直接入口。往上追 `goto Label_5066` 的来源（全文件搜索 `5066`），只有一处外部跳入：`Label_21408`（第 1735 行）——这里先向 `GameplayMessageSubsystem` 广播一条 `MonitorPlayState` 消息、消息文本字面量写死为 `"from MatchController : ActionsReceived"`（第 1740 行），然后 `goto Label_5066`（第 1744 行），进入 `GetNextAction` 的消化循环。再往上追 `Label_21408` 本身如何被进入，找到它是一个字面量入口点：
+
+```cpp
+// (Event, Public, BlueprintEvent)
+public void ActionsReceived()
+{
+    ExecuteUbergraph_MatchController(21408);
+    return;
+}
+```
+
+（`Logic/MatchController.cpp:1938-1944`）
+
+**结论（已确认，不再是待定问题）**：`GetNextAction_Impl`（进而 `CurrentActionId` 的每一次推进）由 `MatchController_C::ActionsReceived()` 这个蓝图事件触发——每触发一次，就循环调用 `GetNextAction()` 把当前已知、尚未处理的动作全部消化完（每条都推进 `CurrentActionId` 并派发 `OnKardsActionEvent`），直到 `GetNextAction()` 返回失败（没有更多已知动作）为止。`ActionsReceived` 本身没有任何原生机器码 xref（在全局 FName 池里搜索字面量字符串 `"ActionsReceived"` 只命中一处、且引用它的同样只有两个数据段的反射表项，没有原生 `CALL`）——这跟 `GetNextAction` 是同一种架构：它是纯蓝图事件，只能被蓝图侧或者原生反射系统按名字动态触发（`ProcessEvent`），不会留下能反查的原生调用指令，这是 UE 蓝图事件调用机制本身的设计（按名字查表分派），不是这份二进制没有 PDB 导致的偶然限制。但这不影响结论的确定性：不管是哪一段原生网络轮询代码最终触发了它，`ActionsReceived` 这个事件本身的语义（结合第 1740 行的调试消息文本、结合它在整个 `MatchController.cpp` 里唯一的用途就是启动 `GetNextAction` 消化循环）已经足以确认——它对应的就是"客户端一次成功处理完服务端轮询回包"这个时刻，每次收到新的（无论是己方确认还是对方新提交的）动作数据后触发一次。这直接印证了"`CurrentActionId` 是本机回放合并动作日志进度指针"这一解释，不再是"更可能"的推测,而是从蓝图字节码直接读出的确定行为。

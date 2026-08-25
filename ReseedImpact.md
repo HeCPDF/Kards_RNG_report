@@ -1,6 +1,6 @@
 # 重播种机制如何解释每一个已观察到的现象
 
-真实抓包已经确认（[README.md](README.md) §2.2-2.3、[evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)、[evidence/action_id-real-capture-sequence.md](evidence/action_id-real-capture-sequence.md)、[evidence/local-vs-confirmed-action-id.md](evidence/local-vs-confirmed-action-id.md)）：`bUseTurnSwitchValidation` 在真实对局里是开启的，`cardsRandomStream` 每次创建/确认动作都会重播种为 `match_id + action_id * 19390`；玩家提交动作前看到的预览结果（天气预报、间谍组织等）用的 `action_id`，是玩家自己的本地投机计数器——只在玩家自己创建新动作时递增，不受对手影响。本文把这套确认的机制，逐条对应到社区观察到的每一个具体现象上。
+真实抓包已经确认（[README.md](README.md) §2.2-2.3、[evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)、[evidence/action_id-real-capture-sequence.md](evidence/action_id-real-capture-sequence.md)、[evidence/local-vs-confirmed-action-id.md](evidence/local-vs-confirmed-action-id.md)）：`bUseTurnSwitchValidation` 在真实对局里是开启的，`cardsRandomStream` 每次创建/确认动作都会重播种为 `match_id + action_id * 19390`。**注意**：反编译进一步确认，真正喂给这个重播种公式的 `CurrentActionId` 字段，跟提交请求 JSON 里那个已经实测确认"只数我方自己动作、从 1 连续递增"的 `action_id` 字段（`Counter3228`），是原生代码里两个不同的字段——完整区分见 [evidence/two-distinct-action-id-counters.md](evidence/two-distinct-action-id-counters.md)。本文以下用"本地计数器"统一指代喂给重播种公式的那个变量，它的精确推进规则（是否严格自计数）尚未完全坐实，但社区"在自己回合内数操作次数"的方法论不依赖于这一点也能成立（原因见该证据文件），本文把这套确认的机制，逐条对应到社区观察到的每一个具体现象上。
 
 ## 1. 为什么 6K 在"连续两次预报、中间不做别的事"时看起来不变，而 2K/4K 会变
 

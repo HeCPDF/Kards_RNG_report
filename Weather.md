@@ -83,7 +83,7 @@ public void GetChooseSpawnCards(TArray<UBaseCardObject*>& cards, bool& markAsSee
 要点：
 
 1. 三个 tier 各自独立地在自己的桶内抽一个下标——不是从全体天气卡里抽，而是轻/中/重三次分别抽签，顺序固定为 light→medium→heavy，共消耗 `cardsRandomStream` 三次。
-2. 字面代码里 `_forecastOptions` 一旦非空就直接复用、不再消费随机流；但实测显示 2K/4K 在同一回合内反复重新预报（不插入其他操作）时结果会变化，只有 6K 大概率保持不变。也就是说，`_forecastOptions` 一定会在某处被清空/重建，只是清空点尚未在反编译代码里定位到——第 4 节给出的确定性模型直接来自实测数据，比这段代码字面上的"永久缓存"更准确。
+2. 字面代码里 `_forecastOptions` 一旦非空就直接复用、不再消费随机流；但实测显示 2K/4K 在同一回合内反复重新预报（不插入其他操作）时结果会变化，只有 6K 大概率保持不变。也就是说，`_forecastOptions` 一定会在某处被清空/重建，只是清空点尚未在反编译代码里定位到——检查过另外几张同样带 `GetChooseSpawnCards` 三选一逻辑的卡（`card_event_blitz_doctrine`「闪击战法」、`card_event_sabotage`「破坏行动」、`card_event_heroes_of_the_soviet_union`「苏联英雄」的对应字段 `PossibleCards`）后发现，这几张卡的实现**跟天气卡不是同一种模式**——它们完全没有"已非空就直接复用"这一步检查，每次调用都会无条件重新扫描并往 `PossibleCards` 里追加，也就是说如果同一局内被调用第二次，理论上会得到重复叠加的候选列表，而不是天气卡这种"要么全新计算要么原样复用"的二选一模式。这说明 `_forecastOptions` 的清空点是天气卡自己特有的逻辑，不能从这几张结构类似的卡上找线索类比过来；第 4 节给出的确定性模型直接来自实测数据，比这段代码字面上的"永久缓存"更准确，但清空点本身仍未定位到。
 3. 雨（rain）/风暴（storm）系的 `card_event_rain1_mist`、`card_event_storm1_gale` 是同构实现（把 `subtype.sunny` 换成 `subtype.rain`/`subtype.storm`，逻辑一模一样）。
 
 ### 2.3 候选池大小影响可变性，但不是唯一原因

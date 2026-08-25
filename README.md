@@ -4,7 +4,7 @@
 
 > 隐私说明：本仓库已对真实抓包中的 `match_id`、玩家账号 ID 及本机绝对路径做脱敏处理，证据文件中的候选编号等推导数据保留原样；如需按公式逐条复现，需用未脱敏的原始抓包重新计算。
 
-本文初稿由 Claude 编写，后经 Codex 按反编译源码与官方卡牌索引整理校对。另见 [天气系统](Weather.md)（2K/4K/6K 预报规律）、[间谍组织](SpyRing.md)（环形分布规律）、[社区实测记录](社区实测记录.md)（社区数据，非主证据）与 [evidence/](evidence/)（原始证据文件）。
+另见 [天气系统](Weather.md)（2K/4K/6K 预报规律）、[间谍组织](SpyRing.md)（环形分布规律）、[社区实测记录](社区实测记录.md)（社区数据，非主证据）与 [evidence/](evidence/)（原始证据文件）。
 
 ## 1. 核心随机流对象
 
@@ -179,3 +179,7 @@ XActionEndOfTurn       action_id=7
 - [evidence/action_id-real-capture-sequence.md](evidence/action_id-real-capture-sequence.md) — `action_id` 真实取值规律的完整证据链。
 - [evidence/CurrentActionId-increment-logic.md](evidence/CurrentActionId-increment-logic.md) — 原生 `GetNextAction_Impl` 状态机分析，及其与 `action_id` 分配规则的关系澄清。
 - [evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md) — 两场真实 PvP 休闲模式对局实时抓包，11 次天气预报全部验证已确认公式，附带 `CurrentActionId` 真实取值、`HT` 动作真实确认，以及跟社区操作计数方法论（见 ReseedImpact.md）交叉核对的数据。
+
+---
+
+本文初稿由 Claude 编写，后经 Codex 按反编译源码与官方卡牌索引整理校对。

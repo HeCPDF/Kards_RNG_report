@@ -42,7 +42,7 @@ struct FGameplayTagContainer GameplayTags = FGameplayTagContainer({
 
 ### 2.2 `GetChooseSpawnCards`：三级天气怎么被选出来
 
-**玩家实际看到的流程，跟"打出预报卡→弹三选一"这个直觉描述不完全一样，这里先澄清一下时序**：预报的本质是——先由 `Forecast()`（§1）从三张一级天气代表卡（`sunny1`/`rain1`/`storm1`）里选一张，这张代表卡被**自动打出**（不是玩家手动选的，见 `BP_CardFunctions.cpp:23533-23539`，`Forecast` 只是把这三个选项传给 `NotifySelectCardToDrawPending` 弹面板，选中后走的是正常的"打出一张卡"流程）；这张代表卡被打出、结算 `OnPlayedFromHand` 之后，**才会**触发它的 `GetChooseSpawnCards`，弹出真正的"轻/中/重三选一"面板给玩家最终选择要抽哪一张天气效果卡。也就是说，从服务端/`action_id` 的角度看，"预报"这个玩家操作实际上至少对应两个独立的游戏内事件：① 代表卡被选中/自动打出（对应 README §3 提到的 `CS`/`XActionCardToDrawSelected` 或类似的"抽卡选择结果"动作类型）；② 该卡的 `OnPlayedFromHand` 触发，进而调用 `GetChooseSpawnCards` 消耗三次 `cardsRandomStream`。这两步之间是否会各自推进 `action_id`、消耗几次随机数，目前还没有用真实抓包逐条核实过——是本报告一个新发现的、值得优先核实的具体验证点。
+**玩家实际看到的流程，跟"打出预报卡→弹三选一"这个直觉描述不完全一样，这里先澄清一下时序（根据反馈更正）**：预报实际上是**两次连续的玩家选择**，不是"选一次、其余自动"：① `Forecast()`（§1）把三张一级天气代表卡（`sunny1`/`rain1`/`storm1`，对应晴/雨/风三种天气类型）传给 `NotifySelectCardToDrawPending` 弹面板，**由玩家选择要哪一种天气类型**，选中的这张代表卡随即被打出；② 该代表卡打出后 `OnPlayedFromHand` 触发，进而调用它自己的 `GetChooseSpawnCards`，弹出第二个面板，**再由玩家在轻/中/重三个候选里选一个**，决定最终抽到哪张具体的天气效果卡。也就是说从服务端/`action_id` 的角度看，"预报"这个玩家体验实际上对应至少两个独立的、都需要玩家操作的游戏内事件：① 天气类型选择（对应 README §3 提到的 `CS`/`XActionCardToDrawSelected` 或类似的"抽卡选择结果"动作类型）；② 天气强度选择，触发 `GetChooseSpawnCards` 消耗三次 `cardsRandomStream`。这两步各自是否推进 `action_id`、消耗几次随机数，目前还没有用真实抓包逐条核实过——是本报告一个新发现的、值得优先核实的具体验证点。
 
 调用 `sunny1_blue_sky` 自己的 `GetChooseSpawnCards`（`card_event_sunny1_blue_sky.cpp:93-209`）来决定轻/中/重三个候选各是谁：
 

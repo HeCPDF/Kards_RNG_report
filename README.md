@@ -1,6 +1,8 @@
 # KARDS 对局生命周期随机数机制报告
 
-来源：FModel 反编译的蓝图伪代码（`Content/Blueprints/`），交叉验证原生实现（IDA，`kards-Win64-Shipping.exe`）与真实抓包（`本地抓包目录/`，2026-08-14，`training`/AI 单机对局，经项目自带 `_codec.py` 解密）。以下所有行号均指反编译导出的 `.cpp` 伪代码文件。
+来源：FModel 反编译的蓝图伪代码（`Content/Blueprints/`），交叉验证原生实现（IDA，`kards-Win64-Shipping.exe`）与真实抓包（本地抓包目录，2026-08-14，`training`/AI 单机对局，经项目自带 `_codec.py` 解密）。以下所有行号均指反编译导出的 `.cpp` 伪代码文件。
+
+> 隐私说明：本仓库已对真实抓包中的 `match_id`、玩家账号 ID 及本机绝对路径做脱敏处理，证据文件中的候选编号等推导数据保留原样；如需按公式逐条复现，需用未脱敏的原始抓包重新计算。
 
 本文由 Claude 编写。另见 [天气系统](Weather.md)（2K/4K/6K 预报规律）、[间谍组织](SpyRing.md)（环形分布规律）、[evidence/](evidence/)（原始证据文件）。
 
@@ -79,7 +81,7 @@ SetRandomStreamWithActionID(receivedAction.action_id);
 
 ## 3. 动作类型与提交流程
 
-来源：`本地反向工程项目/matches\actions.py`/`session.py`/`PROTOCOL.md`（同一个反向工程项目对 REST 协议的重建，非本报告主题但直接支撑上面"`action_id` 如何推进"的结论），交叉验证真实抓包。
+来源：本地反向工程项目的 `wards/matches/actions.py`/`session.py`/`PROTOCOL.md`（同一个反向工程项目对 REST 协议的重建，非本报告主题但直接支撑上面"`action_id` 如何推进"的结论），交叉验证真实抓包。
 
 ### 3.1 有哪些动作类型
 

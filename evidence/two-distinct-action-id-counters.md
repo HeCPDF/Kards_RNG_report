@@ -17,7 +17,7 @@ action_id_value = ++*(this+3228);   // Counter3228，此前证据文件误称为
 
 ## 哪条分支是真实抓包实际走的：分支一
 
-两份真实抓包（`本地抓包目录/`）里，全部解密出来的提交请求 JSON payload 里，**没有任何一条包含 `"validate_turn_switch"` 字段**——按上面反编译出的逻辑，这直接说明这两局真实对局里 `this+1960` 这个标记是**假**，走的是分支一：JSON 里的 `action_id`，用的是 `this+3228`（`Counter3228`），不是 `this+3224`（`CurrentActionId`）。
+两份真实抓包（本地抓包目录）里，全部解密出来的提交请求 JSON payload 里，**没有任何一条包含 `"validate_turn_switch"` 字段**——按上面反编译出的逻辑，这直接说明这两局真实对局里 `this+1960` 这个标记是**假**，走的是分支一：JSON 里的 `action_id`，用的是 `this+3228`（`Counter3228`），不是 `this+3224`（`CurrentActionId`）。
 
 ## 这意味着什么：之前的证据文件测的是 `Counter3228`，不是喂给随机数种子的那个字段
 

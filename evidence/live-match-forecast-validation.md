@@ -1,16 +1,16 @@
 # 真实对局实时验证：mitmproxy 被动抓包，11 次预报全部命中已确认公式
 
-这是本报告目前证据强度最高的一类来源：不是历史抓包文件，而是对**两场正在进行的真实 PvP 对局（均为休闲模式）**用 mitmproxy 被动解密实时流量，逐条读出真实 `action_id`/`action_type`，跟玩家在客户端里实际看到的天气预报结果直接比对：第一场 `match_id=[已脱敏]`（玩家 `[玩家A]` vs `[玩家B]`），第二场 `match_id=[已脱敏]`（`[玩家A]` vs 好友 `[好友玩家]`，"战斗代码"约战）。
+这是本报告目前证据强度最高的一类来源：不是历史抓包文件，而是对**两场正在进行的真实 PvP 对局（均为休闲模式）**用 mitmproxy 被动解密实时流量，逐条读出真实 `action_id`/`action_type`，跟玩家在客户端里实际看到的天气预报结果直接比对：第一场（玩家 A vs 玩家 B），第二场（玩家 A vs 好友玩家，"战斗代码"约战）。原始 `match_id` 与玩家账号 ID 已脱敏。
 
 ## 方法
 
-1. 在这台机器上起一个本地 mitmproxy（`mitmdump -s tools/live_capture_addon.py -p 8082`），系统代理指向 `127.0.0.1:8082`，安装 mitmproxy 的 CA 证书。这个 addon（`本地工具目录/live_capture_addon.py`）只做被动观察：拦截 `kards.live.1939api.com` 的 `/actions` 请求/响应，用项目已有的 `wards/matches/_codec.py::decrypt_packet` 实时解密，不修改、不注入、不伪造任何请求。
+1. 在这台机器上起一个本地 mitmproxy（`mitmdump -s tools/live_capture_addon.py -p 8082`），系统代理指向 `127.0.0.1:8082`，安装 mitmproxy 的 CA 证书。这个 addon（本地工具目录下的 `tools/live_capture_addon.py`）只做被动观察：拦截 `kards.live.1939api.com` 的 `/actions` 请求/响应，用项目已有的 `wards/matches/_codec.py::decrypt_packet` 实时解密，不修改、不注入、不伪造任何请求。
 2. 玩家在真实客户端里正常游玩（人工操作，非自动化/非脚本代打），每次触发天气预报时把弹窗截图发过来；同时 mitmproxy 实时把解密出的 `action_id`/`action_type`/`action_data` 推送过来。
 3. 用截图上的效果文字对照 Weather.md §4.3 的小组表，反推每次预报三档实际展示的下标（0/1/2），再用 README.md §1 已经字节级确认的 LCG 公式、真实 `match_id`，对每个候选 `action_id` 计算 light/medium/heavy 三档下标，找出跟截图完全一致的 `action_id` 取值。
 
 ## 结果：11 次预报，全部命中，零例外
 
-第一场（`match_id=[已脱敏]`）：
+第一场：
 
 | # | 类型 | 展示结果（截图） | 下标 (light,medium,heavy) | 命中的 action_id 候选集 |
 |---|---|---|---|---|
@@ -21,7 +21,7 @@
 | 5 | sunny | 热浪/丛林热/骄阳 = heatwave2 / jungle_fever / scorching_sun | (1,0,0) | {37,69,84,116,128,131} |
 | 6 | rain | 暴雨/骤雨/季风雨 = deluge / torrential_rain2 / monsoon_rain | (0,1,0) | {29,73,76,88,120,135} |
 
-第二场（`match_id=[已脱敏]`，7/8 为同一回合内先后触发的两次预报，中间夹了一张有目标选择/伤害结算效果的卡，见副产品发现 4）：
+第二场（7/8 为同一回合内先后触发的两次预报，中间夹了一张有目标选择/伤害结算效果的卡，见副产品发现 4）：
 
 | # | 类型 | 展示结果（截图） | 下标 (light,medium,heavy) | 命中的 action_id 候选集 |
 |---|---|---|---|---|
@@ -47,7 +47,7 @@ ReseedImpact.md §1 此前的推导认为一次预报对应三个独立的 `Crea
 
 ## 副产品发现 4：两次预报之间实测 `CurrentActionId` 相差 8 或 11——但这不是一次干净的"背靠背"对照
 
-在第二局真实对局（PvP 休闲模式，`match_id=[已脱敏]`，好友对战）里，玩家连续触发了两次预报：
+在第二局真实对局（PvP 休闲模式，好友对战）里，玩家连续触发了两次预报：
 
 - 第一次：暴雨/骤雨/季风雨 = deluge3 / torrential_rain2 / monsoon_rain2，下标 `(2,1,1)`，候选集 `{12,24,27}`。
 - 第二次：暴雨/骤雨/季风雨 = deluge / torrential_rain / monsoon_rain2，下标 `(0,0,1)`，候选集 `{20,23}`。

@@ -103,6 +103,8 @@ cardFunction->SpawnCardInHandBySide(side, cardToSpawn, cardID, ...);
 
 真正悬而未决的是一个更具体的问题：触发"绕开节流、立即轮询"的 `matchaction` websocket 通知，客户端这边收到后不检查发送方是谁就会置位（[evidence/ida-excerpts/BP_KardsSession-matchaction-notification.cpp](evidence/ida-excerpts/BP_KardsSession-matchaction-notification.cpp)）——但这只说明"客户端收到后会怎么处理"，不能说明**服务端是否真的会把这条通知也推给动作的提交者本人**，还是只推给对手（"通知对方你动了一步"是更常见的实现模式）。如果服务端只通知对手、不通知自己，那么本机自己密集操作时就只能依赖 5 秒节流的轮询，而不是每次都被 websocket 提前触发——这跟 4.3/4.4 节的矛盾方向是相关的，但这是服务端行为，反编译客户端二进制看不到，需要真实抓包（记录密集操作时 websocket 消息与轮询请求的真实时间戳）才能确认，是明确的静态分析边界，不是本报告目前能进一步收窄的候选机制。
 
+**这个未决点具体能排除什么、不能排除什么**：[evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md) 的真实抓包已经确认，客户端和服务端最终结果不存在"猜错、对不上"这种分歧——两场真实对局合计 11 次天气预报，玩家实际收到的结果跟公式算出的预测全部吻合，零例外。这排除了"客户端和服务端本来就可能给出不同结果"这个可能性：两边用的是同一套确定性回放（双方合并动作日志），只要计算那一刻双方看到的动作日志状态相同，结果就必然相同，不存在分歧。但这批验证数据里，每次预报都只看一次预览（选类型、再选强度），两步之间是正常人类操作节奏，从未出现过"同一张卡被快速连续重复触发预览"这种密集操作模式——所以它能确认"正常节奏下客户端预览可靠收敛"，但不能直接回答"密集连续触发时，中途每一次预览用的 `CurrentActionId` 是不是也总能跟上"，这仍然是上一段未决问题的范围。
+
 ## 5. 其他经同一随机流的效果卡
 
 与间谍组织结构相同/相近的其他随机效果卡——护航攻击（CONVOY ATTACK）、反潜巡逻（ASW PATROL）、死神降临（DEATH FROM ABOVE）、加压舱（PRESSURIZED CABIN）——已拆分为独立文档 [OtherRandomCardEffects.md](OtherRandomCardEffects.md)，本文不再收录；它们与间谍组织的代码结构对比、三等分桶推导和待查项见该文档。

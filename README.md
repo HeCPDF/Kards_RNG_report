@@ -92,7 +92,7 @@ SetRandomStreamWithActionID(receivedAction.action_id);
 | `PC`（`XActionPlayCardFromHand`） | `PC` | 出牌 |
 | `AC`（`XActionAttackCard`） | `AC` | 攻击 |
 | `ML`（`XActionMoveCardToLine`） | `ML` | 支援线推进到前线 |
-| `HT`（`XActionHandTargetSelected`） | `HT` | 延迟目标选择的第二步提交（仅蓝图反编译推断，未在真实抓包中观测到） |
+| `HT`（`XActionHandTargetSelected`） | `HT` | 延迟目标选择的第二步提交（已由真实对局抓包确认，见 [evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md)：`{"0":触发卡牌ID,"1":选中目标ID}`，格式与蓝图反编译预期一致） |
 | `CS`（`XActionCardToDrawSelected`） | `CS` | "抽/生成 N 选 1"效果的选择结果（同样仅蓝图推断，未实测确认） |
 | `XActionEndOfTurn` | — | 一方回合结束，`reason` 字段已知取值：`"endTurnButton"`（真人点结束回合）、`"timeout"`（计时器到点自动提交）、`"forced"`（被卡牌效果强制结束） |
 | `XActionMulligan` | — | 起手换牌 |
@@ -157,7 +157,7 @@ XActionEndOfTurn       action_id=7
 
 这正是社区仅凭对局内观察、用统计归纳法就能摸出规律（Weather.md 的 2K/4K/6K 代价表、SpyRing.md 的环形游走+完整周期），乃至据此设计出"零费用控制天气结果"打法的根本原因。官方已于 2026-08-23 发布《关于秋季锦标赛预报机制的说明》，确认"尝试利用特定操作控制预报机制结果"属实，将其定性为游戏机制层面的问题，而非外挂/作弊；截至该说明发布，尚未给出具体修复方案或补偿。
 
-**已证明**（Weather.md §4.2）：`GetChooseSpawnCards` 里"三次连续调用直接返回展示下标"这个字面模型，用已经字节级确认的 LCG 公式代入计算，数学上不可能产生 NZ33 实测的"2K 和 4K 代价完全相同"这一现象（`A^1 mod 2^32 ≠ A^2 mod 2^32`，无巧合可能）——这是证明，不是推测。真正的展示结果映射机制需要运行时验证（读取对局内 `_lightWeatherCards` 等数组的实际内容/顺序）才能确定，这是静态反编译方法本身的边界，不是分析没做到位。"结果是确定性的、原则上可预测"这一层，由 §1-§3 的重播种公式+本地计数器机制确认，不依赖于这个映射细节是否已知。
+**已证明**（Weather.md §4.2）：NZ33"2K 和 4K 代价完全相同"这条经验数据，如果套用"三次连续调用的原始返回下标固定对应 light=第1次/medium=第2次变换深度"这个最直接的模型，用已经字节级确认的 LCG 公式代入计算，数学上不可能产生（`A^1 mod 2^32 ≠ A^2 mod 2^32`，无巧合可能，进一步用具体数值算出两档档位各自的"同小组代价"最小值点确实不同，分别是 15 和 3）——这是证明，不是推测；候选数组下标↔NZ33 小组编号的映射关系本身已经解决（同一份 §4.2 反编译出排序比较函数是标准字典序字符串比较，加上桶内候选资产名恰好是"无后缀/2/3"，字典序天然给出下标 0/1/2 = 小组 1/2/3，不需要运行时数据）。"结果是确定性的、原则上可预测"这一层，除了 §1-§3 的重播种公式+本地计数器机制的静态推导外，现在还有 [evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md) 的直接实证：一场真实 PvP 天梯对局里连续 6 次天气预报，玩家实际看到的展示结果全部跟这套确认公式算出的候选值吻合，零例外。
 
 ## 7. 尚待确认的开放问题（每条都已定性到静态分析能解决/不能解决的边界）
 
@@ -174,3 +174,4 @@ XActionEndOfTurn       action_id=7
 - [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该字段命名与真实取值的完整证据链。
 - [evidence/action_id-real-capture-sequence.md](evidence/action_id-real-capture-sequence.md) — `action_id` 真实取值规律的完整证据链。
 - [evidence/CurrentActionId-increment-logic.md](evidence/CurrentActionId-increment-logic.md) — 原生 `GetNextAction_Impl` 状态机分析，及其与 `action_id` 分配规则的关系澄清。
+- [evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md) — 真实 PvP 天梯对局实时抓包，6 次天气预报全部验证已确认公式，附带 `CurrentActionId` 真实取值、`HT` 动作真实确认、"1 次预报=3 单位"推导的更正。

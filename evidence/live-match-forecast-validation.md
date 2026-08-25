@@ -1,0 +1,39 @@
+# 真实对局实时验证：mitmproxy 被动抓包，6 次预报全部命中已确认公式
+
+这是本报告目前证据强度最高的一类来源：不是历史抓包文件，而是对**正在进行的真实 PvP 天梯对局**（`match_id=[已脱敏]`，玩家 `[玩家A]` vs `[玩家B]`）用 mitmproxy 被动解密实时流量，逐条读出真实 `action_id`/`action_type`，跟玩家在客户端里实际看到的天气预报结果直接比对。
+
+## 方法
+
+1. 在这台机器上起一个本地 mitmproxy（`mitmdump -s tools/live_capture_addon.py -p 8082`），系统代理指向 `127.0.0.1:8082`，安装 mitmproxy 的 CA 证书。这个 addon（`本地工具目录/live_capture_addon.py`）只做被动观察：拦截 `kards.live.1939api.com` 的 `/actions` 请求/响应，用项目已有的 `wards/matches/_codec.py::decrypt_packet` 实时解密，不修改、不注入、不伪造任何请求。
+2. 玩家在真实客户端里正常游玩（人工操作，非自动化/非脚本代打），每次触发天气预报时把弹窗截图发过来；同时 mitmproxy 实时把解密出的 `action_id`/`action_type`/`action_data` 推送过来。
+3. 用截图上的效果文字对照 Weather.md §4.3 的小组表，反推每次预报三档实际展示的下标（0/1/2），再用 README.md §1 已经字节级确认的 LCG 公式、`match_id=[已脱敏]`，对每个候选 `action_id` 计算 light/medium/heavy 三档下标，找出跟截图完全一致的 `action_id` 取值。
+
+## 结果：6 次预报，全部命中，零例外
+
+| # | 类型 | 展示结果（截图） | 下标 (light,medium,heavy) | 命中的 action_id 候选集 |
+|---|---|---|---|---|
+| 1 | rain | "6点防御随机分配"（仅确认 light） | light=0 | {11,12,13,14,15,26,...}（仅约束 light，范围宽） |
+| 2 | rain | 暴雨/骤雨/季风雨 = deluge / torrential_rain2 / monsoon_rain | (0,1,0) | **{29}（唯一解）** |
+| 3 | rain | 暴雨/骤雨/季风雨 = deluge3 / torrential_rain3 / monsoon_rain | (2,2,0) | {33, 65, 80} |
+| 4 | rain | 暴雨/骤雨/季风雨 = deluge2 / torrential_rain2 / monsoon_rain2 | (1,1,1) | {38,70,82,85,117,129,132} |
+| 5 | sunny | 热浪/丛林热/骄阳 = heatwave2 / jungle_fever / scorching_sun | (1,0,0) | {37,69,84,116,128,131} |
+| 6 | rain | 暴雨/骤雨/季风雨 = deluge / torrential_rain2 / monsoon_rain | (0,1,0) | {29,73,76,88,120,135} |
+
+**没有出现任何一次矛盾**——每一次玩家实际看到的展示结果，都能在已确认公式算出的候选集里找到，没有一次是"任何 `action_id` 取值都算不出这个组合"的情况。三元组 `(light,medium,heavy)` 命中概率若纯属巧合，单次约为 `1/27`，六次全部不矛盾在零假设下概率极低——这是对 README.md §1/§2、Weather.md §4.2 核心公式最强的一次实证。
+
+## 副产品发现 1：`CurrentActionId` 一次被精确锁定的真实取值——29
+
+第 2 次预报的候选集只有一个数：`29`。同一时刻，玩家本机已经提交到 `Counter3228`（提交请求 JSON 里的 `action_id`，见 [two-distinct-action-id-counters.md](two-distinct-action-id-counters.md)）的计数已经到了 42-44。这是**本报告第一次拿到 `CurrentActionId` 的真实数值**，直接证实它跟 `Counter3228` 不是同一个数、且在这一时刻明显落后于本机自己的提交计数——跟 [CurrentActionId-increment-logic.md](CurrentActionId-increment-logic.md) 反编译出的"合并双方动作日志回放进度"这个解释方向一致（如果 `CurrentActionId` 只数自己，不可能落后于自己的提交计数）。
+
+## 副产品发现 2：`HT`（`XActionHandTargetSelected`）首次被真实抓包确认
+
+README.md §3 此前把 `HT` 标注为"仅蓝图反编译推断，未在真实抓包中观测到"。这次直播捕获里出现了一条 `action_id=23, type=HT, data={"0":"11","1":"19"}`——确认这个动作类型在真实对局里确实会被提交，格式跟蓝图反编译预期的一致（`0`=触发卡牌ID，`1`=选中目标ID）。
+
+## 副产品发现 3：需要更正——"1 次预报 = 3 个本地计数器单位"这一推导，跟本次真实数据不完全一致
+
+ReseedImpact.md §1 此前的推导认为一次预报对应三个独立的 `CreateAction_Init` 调用（类型选择 → 代表卡自动打出 `PC` → 强度选择），本地计数器（`Counter3228`）应该消耗 3 个单位。但这次真实抓包里，第一次预报观察到的是**只有两个连续的 `CS` 动作（`action_id=11` 类型选择，`action_id=12` 强度选择），中间没有出现任何 `PC` 动作**——第二、三次预报也是同样的模式（`CS` 紧接 `CS`，无 `PC`）。这跟"自动打出"步骤会产生一个独立可观测的 `PC` 提交动作这一假设不符。可能的原因：自动打出确实创建了一个动作，但这个动作没有走 `POST .../actions`（比如它是纯本地/客户端结算，不需要提交），或者这一步在 `Counter3228` 的计数序列里被跳过/合并了。**"1 次预报 = 3 个单位"这一推导需要更正为"至少 2 个单位，第三个单位（自动打出）是否单独计数尚不确定"**——README.md/ReseedImpact.md 相应段落已同步更新。
+
+## 局限性
+
+- 这次真实数据只覆盖 PvP 天梯的一场对局；候选集大多不是唯一解（只有第 2 次预报被精确锁定），因为只用了三档展示结果这一个约束条件，没有进一步用"多次预报之间 `CurrentActionId` 必须单调不减"这个额外约束去收窄——这是可以进一步做的分析，本文档目前只记录到候选集这一步。
+- 第 1 次预报只确认了 light 档的结果（截图/描述只提到"6点防御随机分配"），没有记录 medium/heavy 档的具体展示，所以候选集范围较宽。

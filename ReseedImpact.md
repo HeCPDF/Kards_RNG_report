@@ -4,21 +4,14 @@
 
 ## 1. 为什么 6K 在"连续两次预报、中间不做别的事"时看起来不变，而 2K/4K 会变
 
-**一次完整的预报触发在本地计数器上消耗 3 个单位，这一点已经从代码的动作创建链上逐步反编译确认，不是照搬社区的说法**：
+**动作创建链本身确实有三个概念上独立的 `CreateAction_Init` 调用点，但真实抓包已经证明其中一个（自动打出）不会转化成一个能被计入本地计数器的独立提交动作，"1 次预报 = 3 个单位"这个具体数字需要重新核实**：
 
 1. 玩家在第一个弹窗里选择天气类型（晴/雨/风）——这个选择通过 `CreateAction_InitStart("XActionCardToDrawSelected", ...)` 创建一个动作（`BP_OnlineMatch.cpp:2683-2686`）。
 2. 选中的一级天气代表卡被 `SpawnCardInHandBySide` 加入手牌；因为它带 `autoplay` 标签，`BP_CardFunctions.cpp:12939-12944` 检测到这个标签后调用 `GameStateRef->AddAutoPlayCards(cardID)`，把这张卡加入一个"待自动打出"队列，不是立刻创建动作。
-3. `ExecuteAutoPlayCards()`（`BP_PlayerMoves.cpp:850-899`）在稍后的时机处理这个队列，对队列里的每一张卡分别调用 `CreateAction_PlayCardFromHand_Start(...)` → `PlayCardFromHand(...)` → `CreateAction_PlayCardFromHand_End()`（`BP_PlayerMoves.cpp:877-887`）——这是一个跟第 1 步完全独立的、真实的 `XActionPlayCardFromHand` 动作创建。
+3. `ExecuteAutoPlayCards()`（`BP_PlayerMoves.cpp:850-899`）在稍后的时机处理这个队列，对队列里的每一张卡分别调用 `CreateAction_PlayCardFromHand_Start(...)` → `PlayCardFromHand(...)` → `CreateAction_PlayCardFromHand_End()`（`BP_PlayerMoves.cpp:877-887`）——蓝图代码层面这确实是一个跟第 1 步独立的 `XActionPlayCardFromHand` 动作创建。
 4. 这次"打出"触发 `OnPlayedFromHand`，进而调用该卡自己的 `GetChooseSpawnCards`，弹出第二个面板（轻/中/重三选一）；玩家选择后，同样通过 `CreateAction_InitStart("XActionCardToDrawSelected", ...)` 创建第三个动作。
 
-也就是说，玩家体验上的"一次预报"，在代码里对应**三个独立的、各自触发一次 `CreateAction_Init` 的动作**（天气类型选择、代表卡自动打出、天气强度选择），每一个都会推进本地计数器——这正是"1 次预报 = 3 个单位"的来源，直接从动作创建链反编译得出，不是外部经验数字。同一回合内，得到第一次预报结果后不做任何其他操作、直接再打出一张预报牌，两次预报合计在本地计数器上消耗 `3 + 3 = 6` 个单位。
-
-NZ33 的代价表（Weather.md §4.1）给出：2K/4K 顺时针跨组代价是 3、每档小组数是 3；6K 顺时针跨组代价是 1、小组数同样是 3。把"6 个单位"代入两边：
-
-- 2K/4K：`6 ÷ 3 = 2` 个小组跨越——3 个小组的环上走 2 步，落在跟起点不同的小组上，所以结果会变。
-- 6K：`6 ÷ 1 = 6` 个小组跨越——3 个小组的环上走 6 步，`6 mod 3 = 0`，恰好绕完整整两圈，精确落回起点，所以看起来"没变"。
-
-**6K 不是更难变，而是"连续预报两次"这个具体操作恰好推进了 6 个单位，而 6 正好是 6K 那个环绕一整圈所需单位数（3）的整数倍**——纯粹是这两个数字（连续两次预报的固定消耗量、6K 环的固定周长）巧合对齐的结果。换成连续预报三次（消耗 9 个单位），6K 会变（`9÷1=9`，`9 mod 3=6≠0`），2K/4K 也会变（`9÷3=3`，`3 mod 3=0`，反而 2K/4K 在三次预报后会绕回起点、看起来"不变"）——这个模型能反过来预测这类交叉现象，是它比"候选池大小"或任何其他解释更可取的地方：不需要额外假设，纯粹是已确认代价表数字代入已确认的"一次预报=3单位"这个事实后的算术结果。
+**真实对局抓包（[evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md)，2026-08-25，mitmproxy 被动解密，PvP 天梯真实对局）推翻了"第 2 步会产生一次独立可数的动作"这一点**：连续 3 次真实触发的预报里，网络上观测到的都只有两个连续的 `CS`（`XActionCardToDrawSelected`）提交，中间从未出现过 `PC`（`XActionPlayCardFromHand`）提交——也就是说，自动打出这一步即使在蓝图逻辑上确实走了一次独立的动作创建，也没有产生一个会被计入本地计数器（无论是 `Counter3228` 还是喂给重播种公式的 `CurrentActionId`）的独立提交记录。这意味着"1 次预报 = 3 个单位"这个具体数字目前**没有真实数据支持**，需要用一次干净的、中间不夹杂其他操作的连续两次预报做受控测试才能重新核实"1 次预报"到底对应几个单位——本节此前"6=2×3"这套算术推导，前提条件（"3 单位"这个数字）已经不再确定，结论本身（"6K 连续两次预报后倾向不变、2K/4K 倾向改变"这个定性现象）依然是社区反复验证过的真实现象，只是这里给出的具体数字化解释需要重新推导，不能再当作已证实的结论呈现。
 
 ## 2. 为什么会存在这个漏洞：确定性重播种 + 玩家可自行控制的本地计数器
 

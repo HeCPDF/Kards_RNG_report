@@ -131,7 +131,22 @@ v14 = v11 + (int)(float)((float)(*(float *)&result - 1.0) * (float)v12);   // Mi
 
 `GetChooseSpawnCards`（`card_event_sunny1_blue_sky.cpp:93-209`，蓝图，FModel 反编译确认）对 light/medium/heavy 三个候选池依次各调用一次 `RandomIntFromRangeWithStream`，顺序固定；`SetRandomStreamWithActionID`（`BP_OnlineMatch.cpp:24520-24536`，蓝图，FModel 反编译确认）把 `cardsRandomStream` 重播种为 `match_id + action_id * 19390`——这两点前面章节已经交叉确认过，不再重复。
 
-以上是本报告目前能够从 IDA/FModel 直接确认、无需任何额外假设的全部内容。这套确认的算法+调用顺序，跟 NZ33 实测代价表（§4.1）之间具体如何对应，仍然没有在反编译代码里找到直接连接两者的位置——`RandomIntFromRangeWithStream` 确实被调用，返回值确实决定了下标，但玩家最终在 UI 上看到的是不是就是这个下标直接对应的结果，中间是否还经过其他尚未定位到的代码处理，本报告目前没有找到答案，留作开放问题（见 README.md §7）。
+以上是本报告目前能够从 IDA/FModel 直接确认、无需任何额外假设的全部内容。
+
+**证明：字面的"三连抽直接决定展示结果"模型，在数学上不可能产生 NZ33 记录的 2K/4K 代价相同这一现象。** 这不是猜测，是从上面已经字节级确认的 LCG 公式直接算出来的：如果 light（2K）、medium（4K）、heavy（6K）三档的展示结果，就是 `GetChooseSpawnCards` 里那三次连续调用各自返回的原始下标，那么 light 对应的是重播种后第 1 次变换的结果，medium 是第 2 次。线性同余变换是仿射映射 `f(x)=Ax+C`，两个只差常数 `d` 的种子，变换 `k` 次后的差值精确是 `A^k·d (mod 2^32)`。用已确认的 `A=196314165` 直接算：
+
+```
+A^1 mod 2^32 = 196314165
+A^2 mod 2^32 = 3026498297
+```
+
+这两个数不相等，而且不存在任何巧合让它们相等——这意味着 light（k=1）和 medium（k=2）在"`action_id` 每 +1，等效位移多少"这件事上，数学上必然不同。但 NZ33 实测代价表明确记录 2K 和 4K 的代价完全相同（同组 15、顺时针 3、逆时针 9，一模一样）。**这两个事实不可能同时成立**——所以"三连抽的原始返回下标就是玩家看到的展示结果"这个假设，已经被严格证伪，不再是待验证的假设，而是被排除的可能性。
+
+排除这个假设之后，剩下的可能性只有两类，而且已经可以逐一排查：
+1. **重播种在三次抽签之间又发生了一次**（不是一次重播种后连续三次变换）——已排除：`SetRandomStreamWithActionID` 只在动作创建时调用一次（README §2.2 调用点 A），`GetChooseSpawnCards` 内部没有再次调用它或 `SetRandomStreamByMatchID` 的代码（本节反编译到的蓝图源码里没有这两个函数名出现在 `GetChooseSpawnCards` 内部）。
+2. **`_lightWeatherCards`/`_mediumWeatherCards`/`_heavyWeatherCards` 数组下标，跟 NZ33 的"小组 1/2/3"编号不是简单的对应关系**——这一点用现有的静态反编译资料**无法进一步证实或证伪**：数组是 `GetAllActiveStaticCards` 遍历 `GetAllStaticCardsSortedByName()` 的结果按标签过滤而来，`GetAllStaticCardsSortedByName` 按卡牌 `Name`（即 `card_event_sunny2_heatwave`/`heatwave2`/`heatwave3` 这类字符串）做的具体排序规则、以及这个排序结果是否在所有语言/建置版本下稳定，本报告没有找到反编译依据能确认，需要运行时读取这三个数组的实际内容（内存读取或对局内添加调试输出）才能验证——这是静态反编译方法本身的边界，不是分析没做到位。
+
+结论：驱动 2K/4K/6K 展示结果的具体机制，不是"三次连续调用的原始返回值直接展示"，这一点已经证明；真正的机制需要运行时验证才能确定，属于本报告静态分析方法论的边界，不属于待验证假设。
 
 ### 4.2.1 假设一场对局，逐步套用上面的算法（数值示例，不是真实抓包）
 

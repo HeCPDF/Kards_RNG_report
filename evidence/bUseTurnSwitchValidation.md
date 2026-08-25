@@ -83,8 +83,8 @@
 
 **结论（更正为确定性结论）**：这两份真实抓包覆盖的对局（均为 `training`/AI 单机对局）里，`validate_turn_switches` 实际值是 **`true`（开启）**——也就是说，`SetRandomStreamWithActionID` 的重播种分支**在真实对局里是被启用的，不是被跳过的**。README.md §4.1 此前"统一结论"部分假设的"`bUseTurnSwitchValidation == false`、全场只播种一次"这个前提，在这两份真实抓包对应的对局类型下**是不成立的**——需要按这个新证据重新审视 Weather.md/SpyRing.md 里以"从未重播种"为主线的解释，具体影响见 [ReseedImpact.md](../ReseedImpact.md)（已根据这条证据更新其"目前不知道是哪种模式"的结论）。
 
-这条证据目前只覆盖 `match_type: "training"`（人机单机局）；未见到 PvP/天梯/锦标赛对局的抓包，不能排除不同 `match_type` 下这个值不同。
+这条证据目前只覆盖 `match_type: "training"`（人机单机局）。这个值是服务端按每局对局下发的字段（第 82 行已确认，不是客户端硬编码常量），所以 PvP/天梯/锦标赛下的取值，只能靠那些对局类型各自的真实抓包确认——这是数据覆盖范围的边界（见 [ReseedImpact.md](../ReseedImpact.md) §4），不是机制本身还有不确定的地方。
 
 ## 与随机数结论的关系
 
-`bUseTurnSwitchValidation == false` 时，`SetRandomStreamWithActionID` 直接 return，`cardsRandomStream` 就不会按 `match_id + action_id*19390` 重新播种——整场对局共用同一条从 `match_id` 播种出来的确定性序列。这是 README.md §4.1 "统一结论" 的前提条件，目前的证据强度是：**蓝图代码证实了这个开关存在、被读取、且能完全跳过重播种；但触发条件/默认值仍未定位到赋值点**。这个开关如果实际是**开启**的，对社区已发现规律的可用性有什么影响，见新增的 [ReseedImpact.md](../ReseedImpact.md)。
+`bUseTurnSwitchValidation == false` 时，`SetRandomStreamWithActionID` 直接 return，`cardsRandomStream` 就不会按 `match_id + action_id*19390` 重新播种——整场对局共用同一条从 `match_id` 播种出来的确定性序列。这两份真实抓包（`training` 对局）里这个开关的值确认为 `true`，即重播种机制在这些对局里是启用的；具体影响见 [ReseedImpact.md](../ReseedImpact.md)。

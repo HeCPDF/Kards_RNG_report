@@ -4,7 +4,7 @@ ReseedImpact.md 最初的分析里，把 `action_id`（本地投机计数器 `Ge
 
 ## 定位方法
 
-1. `AMatchControllerV2::execGetCurrentActionID`（`0x144a93f20`）→ 调用 `MatchControllerV2_GetCurrentActionID_Impl`（`0x144aec160`），后者是纯 getter：`return *(unsigned int *)(a1 + 3224);`——确认 `CurrentActionId` 字段在原生内存布局里的真实偏移是 `+3224`（即 `0xC98`），跟此前 IDA 结构体重建标注的一致。
+1. `AMatchControllerV2::execGetCurrentActionID`（`0x144a93f20`）→ 调用 `MatchControllerV2_GetCurrentActionID_Impl`（`0x144aec160`），后者是纯 getter：`return *(unsigned int *)(a1 + 3224);`——确认 `CurrentActionId` 字段在原生内存布局里的真实偏移是 `+3224`（即 `0xC98`），跟此前结构体布局分析记录的一致。
 2. 用 `search_text` 在 `AMatchControllerV2` 全部原生函数所在的地址段（`0x144a80000`-`0x144b20000`，约 5MB，远小于整个 `.text`，能在超时前扫完）搜索反汇编里出现的 `0C98h` 偏移引用，命中 33 处，分布在十几个不同函数里——包括至少两处 `inc dword ptr [...+0C98h]` 和三处 `mov dword ptr [...+0C98h], 1`，全部集中在 `MatchControllerV2_GetNextAction_Impl`（`0x144af2180`）和几个初始化/重置类函数里。
 3. 完整反编译 `MatchControllerV2_GetNextAction_Impl`（对局的动作日志/回合状态机核心函数）确认了这些写入点各自的触发条件。
 
@@ -30,7 +30,7 @@ ReseedImpact.md 最初的分析里，把 `action_id`（本地投机计数器 `Ge
 
 ## 触发时机：已定位到具体的蓝图事件
 
-`GetNextAction_Impl` 的调用点 `execGetNextAction`（原生 exec thunk，`_ZN18AMatchControllerV217execGetNextActionEv`，`0x144a94360`）在 IDA 全局交叉引用里**只有两处引用，且都是数据段（反射系统的 `UFunction` 元数据表项）**，没有任何一处原生机器码直接 `call` 它——这是 `BlueprintCallable UFUNCTION` 的正常形态：蓝图虚拟机通过按名字/索引查表分派调用，不生成能被 `xrefs_to` 直接找到的原生 `CALL` 指令；这正是此前反查两个候选入口点（19805、5308）时反查方法本身失效的原因，不是分析没做到位——因为真正的调用点根本不在原生代码里,而是蓝图字节码本身。
+`GetNextAction_Impl` 的调用点 `execGetNextAction`（原生 exec thunk，`_ZN18AMatchControllerV217execGetNextActionEv`，`0x144a94360`）在 IDA 全局交叉引用里**只有两处引用，且都是数据段（反射系统的 `UFunction` 元数据表项）**，没有任何一处原生机器码直接 `call` 它——这是 `BlueprintCallable UFUNCTION` 的正常形态：蓝图虚拟机通过按名字/索引查表分派调用，不生成能被 `xrefs_to` 直接找到的原生 `CALL` 指令；这正是此前反查两个候选入口点（19805、5308）时反查方法本身失效的原因，不是分析没做到位——因为真正的调用点根本不在原生代码里，而是蓝图字节码本身。
 
 改用 FModel 反编译出的蓝图字节码（`Logic/MatchController.cpp`，这是 `AMatchController_C`——`AMatchControllerV2` 的蓝图子类——的完整 `ExecuteUbergraph_MatchController` 反编译）直接定位：入口标签 `Label_5308`（第 482 行）只能通过 `Label_5066` 处的一个条件判断（`isResyncingMatch || (!preStateDone_DoMulligan && bUseActionsForMulligan)` 为假时）用 `goto` 到达（第 465-483 行），本身不是任何蓝图事件的直接入口。往上追 `goto Label_5066` 的来源（全文件搜索 `5066`），只有一处外部跳入：`Label_21408`（第 1735 行）——这里先向 `GameplayMessageSubsystem` 广播一条 `MonitorPlayState` 消息、消息文本字面量写死为 `"from MatchController : ActionsReceived"`（第 1740 行），然后 `goto Label_5066`（第 1744 行），进入 `GetNextAction` 的消化循环。再往上追 `Label_21408` 本身如何被进入，找到它是一个字面量入口点：
 

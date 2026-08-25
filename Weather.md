@@ -114,7 +114,7 @@ public void GetChooseSpawnCards(TArray<UBaseCardObject*>& cards, bool& markAsSee
 
 ### 4.2 引擎算法：直接反编译确认，不依赖任何未验证的源码假设
 
-`cardFunction->RandomIntFromRangeWithStream(min, max, out)` → `BP_CardFunctions.cpp:12423`（蓝图，FModel 反编译确认，一行转发）→ `UKismetMathLibrary::RandomIntegerInRangeFromStream`。这个原生函数在 `kards-Win64-Shipping.exe` 里的真实反编译（IDA，地址 `0x143ddce50`，已在本会话重命名为 `UKismetMathLibrary_execRandomIntegerInRangeFromStream`）如下（`v7` 指向 `FRandomStream` 结构体，`+0` 是 `InitialSeed`，`+4` 是 `Seed`；`v11`=`min`，`v12`=`max-min+1`）：
+`cardFunction->RandomIntFromRangeWithStream(min, max, out)` → `BP_CardFunctions.cpp:12423`（蓝图，FModel 反编译确认，一行转发）→ `UKismetMathLibrary::RandomIntegerInRangeFromStream`。这个原生函数在 `kards-Win64-Shipping.exe` 里对应 IDA 地址 `0x143ddce50` 的反编译如下（`v7` 指向 `FRandomStream` 结构体，`+0` 是 `InitialSeed`，`+4` 是 `Seed`；`v11`=`min`，`v12`=`max-min+1`）：
 
 ```cpp
 v13 = 196314165 * *((_DWORD *)v7 + 1) + 907633515;   // Seed = Seed*196314165 + 907633515 (mod 2^32)

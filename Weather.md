@@ -116,34 +116,54 @@ public void GetChooseSpawnCards(TArray<UBaseCardObject*>& cards, bool& markAsSee
 
 "代价"指：从当前展示的效果切换到目标效果，中间需要发生多少次会推进随机流的操作。6K 的顺时针跨组代价只有 1，几乎任何一次有效操作都足够让它跳到下一个小组；但同一小组内部三个效果之间的切换代价是 0，两次预报之间如果没有发生跨组事件，6K 展示的会一直是同一小组内的效果，看起来像没变。2K/4K 相反：跨组代价是 3，同组代价高达 15，通常需要至少 3 次有效操作才会跳到下一个小组——这正是 2K/4K 在同回合内不插入额外步骤也会变化、只有 6K 大概率保持不变的成因。
 
-### 4.2 从引擎源码解释代价数字的来源
+### 4.2 引擎算法：直接反编译确认，不依赖任何未验证的源码假设
 
-`RandomIntFromRangeWithStream` → `UKismetMathLibrary::RandomIntegerInRangeFromStream`（`Engine/Private/KismetMathLibrary.cpp:1059`，一行转发）→ `FRandomStream::RandRange`（`Engine/Public/Math/RandomStream.h`）。`FRandomStream` 只维护一个 32 位 `Seed`，每次取值都会先执行一次线性同余变换：
+`cardFunction->RandomIntFromRangeWithStream(min, max, out)` → `BP_CardFunctions.cpp:12423`（蓝图，FModel 反编译确认，一行转发）→ `UKismetMathLibrary::RandomIntegerInRangeFromStream`。这个原生函数在 `kards-Win64-Shipping.exe` 里的真实反编译（IDA，地址 `0x143ddce50`，已在本会话重命名为 `UKismetMathLibrary_execRandomIntegerInRangeFromStream`）如下（`v7` 指向 `FRandomStream` 结构体，`+0` 是 `InitialSeed`，`+4` 是 `Seed`；`v11`=`min`，`v12`=`max-min+1`）：
 
-```
-Seed = Seed * 196314165 + 907633515   (mod 2^32)
-```
-
-`GetFraction()` 用变换后 `Seed` 的高 23 位构造出 `[0,1)` 之间的浮点数；`RandRange(Min, Max)` 就是 `Min + floor(GetFraction() * (Max - Min + 1))`。引擎头文件自己在注释里写明"低位质量很差，不要用取模运算符"（Very bad quality in the lower bits. Don't use the modulus operator），说明 Epic 刻意只取高位来避开经典 LCG 低位相关性缺陷——单次调用 `RandRange` 的统计质量本身没有问题，"环形代价"这种结构不会从单次抽样的统计特性里自然长出来。
-
-真正可能产生这种结构的位置，是 `SetRandomStreamWithActionID` 的重播种公式（README §2.2）：`seed = match_id + action_id * 19390`。如果小组下标确实由重播种后单次抽样决定，那么把这个种子公式代入线性同余变换：
-
-```
-Seed'(action_id) = (match_id + action_id * 19390) * 196314165 + 907633515   (mod 2^32)
-                  = 常数 + action_id * ((19390 * 196314165) mod 2^32)
+```cpp
+v13 = 196314165 * *((_DWORD *)v7 + 1) + 907633515;   // Seed = Seed*196314165 + 907633515 (mod 2^32)
+*((_DWORD *)v7 + 1) = v13;                            // 写回 Seed
+result = (v13 >> 9) | 0x3F800000;                     // GetFraction()：取高 23 位构造 [1,2) 浮点数
+v14 = v11 + (int)(float)((float)(*(float *)&result - 1.0) * (float)v12);   // Min + floor(GetFraction()*(Max-Min+1))
 ```
 
-也就是说，`action_id` 每增加 1，变换后的 `Seed'` 就固定增加同一个步长 `Δ = (19390 × 196314165) mod 2^32 = 1190635094`，跟原始 LCG 的性质无关——这本身是一个以 `Δ` 为步长的等差数列。`GetChooseSpawnCards` 里 light/medium/heavy 三次抽签是对同一个重播种后的 `Seed'` 连续做三次线性同余变换，也就是分别处于"变换 1 次""变换 2 次""变换 3 次"之后的状态。因为线性同余变换是仿射映射（`f(x) = A·x + C`），两个只相差一个常数 `d` 的种子，变换 `k` 次之后的差值会精确变成 `A^k · d (mod 2^32)`——`C` 在做差时会抵消掉。也就是说，light（第 1 次变换）、medium（第 2 次）、heavy（第 3 次）三个 tier，各自对应的"`action_id` 每 +1，等效种子步长是多少"并不相同：
+这不是从 UE5.6 引擎源码推断或假设出来的公式，是直接从这个二进制文件（Kards 使用的 UE5.6 fork）反汇编读出来的字节码，逐条对应上面四行 C 伪代码——常数 `196314165`、`907633515` 已用 `find_bytes` 在整个二进制里定位（命中 `0x140eaf4b2` 等多处，包括这个函数本身），确认这个 fork 没有修改这两个 LCG 常数。每次调用 `RandomIntFromRangeWithStream`，`Seed` 恰好做一次这样的变换，返回值恰好是这一次变换后的结果——没有隐藏的多次调用或额外处理。
 
-| 变换次数 k（对应 tier） | 等效步长 `Δ_k = (19390 × 196314165^k) mod 2^32` | 换算成 3 分桶，平均多少次 `action_id` 递增会让桶下标变化 1 |
-|---|---|---|
-| k=1（light/2K，若按抽签顺序对应） | 1190635094 | 约 1.20 次 |
-| k=2（medium/4K） | 1663813582 | 约 0.86 次 |
-| k=3（heavy/6K） | 2854262182 | 约 0.50 次 |
+`GetChooseSpawnCards`（`card_event_sunny1_blue_sky.cpp:93-209`，蓝图，FModel 反编译确认）对 light/medium/heavy 三个候选池依次各调用一次 `RandomIntFromRangeWithStream`，顺序固定；`SetRandomStreamWithActionID`（`BP_OnlineMatch.cpp:24520-24536`，蓝图，FModel 反编译确认）把 `cardsRandomStream` 重播种为 `match_id + action_id * 19390`——这两点前面章节已经交叉确认过，不再重复。
 
-这组精确计算出的数字，跟 NZ33 实测出的代价表对不上，而且对不上的地方本身就是一条有信息量的负面结果：如果 2K 和 4K 真的分别对应 `k=1`、`k=2` 两次不同深度的变换,按上表它们应该有明显不同的"多久变一次"节奏,但 NZ33 的数据显示 **2K 和 4K 的代价完全相同**（都是同组 15、顺时针 3、逆时针 9），只有 6K 独立不同。这排除了"三个 tier 的小组下标都是各自独立、直接对重播种后的流做一次 `RandRange` 抽样"这个最简单的假设——如果真是这样，2K 和 4K 不应该表现出一模一样的节奏。
+以上是本报告目前能够从 IDA/FModel 直接确认、无需任何额外假设的全部内容。这套确认的算法+调用顺序，跟 NZ33 实测代价表（§4.1）之间具体如何对应，仍然没有在反编译代码里找到直接连接两者的位置——`RandomIntFromRangeWithStream` 确实被调用，返回值确实决定了下标，但玩家最终在 UI 上看到的是不是就是这个下标直接对应的结果，中间是否还经过其他尚未定位到的代码处理，本报告目前没有找到答案，留作开放问题（见 README.md §7）。
 
-更可能的解释是：2K 和 4K 的"当前小组下标"共享同一个计算路径或同一个显式计数器（例如两者都读同一个"本回合已使用操作数"之类的整数变量，再做一次简单的取模/查表，而不是分别各自调用一次 `RandomIntFromRangeWithStream`），只有 6K 因为候选池经常退化到只剩 1 个可选项（第 2.3 节），表现出独立的、更小的等效代价。换句话说：`_forecastOptions` 展示给玩家的具体是哪三张卡，很可能不是 `GetChooseSpawnCards` 这段蓝图代码字面呈现的"每次都各自独立抽签"，而是有另一层尚未定位到的逻辑（可能在原生 C++ 侧）先计算出一个"当前小组指针"，再用这个指针去查表——`RandomIntFromRangeWithStream` 本身出现在反编译代码里是真实的，但它计算出的下标是否就是玩家最终看到的那个下标，仍然没有被独立证实。这是本报告目前最明确、也最值得用 IDA 继续追查的开放问题：需要找到"小组指针"实际的存储位置和推进它的代码，而不是停留在对 `FRandomStream` 统计性质的推演上。
+### 4.2.1 假设一场对局，逐步套用上面的算法（数值示例，不是真实抓包）
+
+下面用一个**假设**的对局，把 §4.2 确认的公式从头到尾算一遍，展示这套机制实际怎么运作。`match_id` 和 `action_id` 用的是虚构数字，不对应任何真实对局；候选池大小按每档最简单的情形（3 个候选，下标 0-2）处理，不代表真实候选池一定是 3——这只是为了让计算过程可复现、可验证。
+
+假设 `match_id = 1000000000`，玩家在本回合触发预报时，喂给 `SetRandomStreamWithActionID` 的 `action_id = 10`：
+
+**第一步，重播种**（`BP_OnlineMatch.cpp:24520-24536`）：
+```
+seed = match_id + action_id * 19390 = 1000000000 + 10*19390 = 1000193900
+cardsRandomStream.Seed = 1000193900
+```
+
+**第二步，`GetChooseSpawnCards` 依次调用三次 `RandomIntFromRangeWithStream(0, 2)`**（严格按 §4.2 反编译出的公式，逐次用上一步算出的 `Seed` 继续变换）：
+
+| 第几次调用 | 变换前 Seed | `Seed = Seed*196314165+907633515 mod 2^32` | 返回下标（`floor(GetFraction()*3)`） |
+|---|---|---|---|
+| 1（light） | 1000193900 | 1626977479 | 1 |
+| 2（medium） | 1626977479 | 4280773790 | 2 |
+| 3（heavy） | 4280773790 | 431904801 | 0 |
+
+也就是说，这次预报玩家会看到：light 桶第 1 号候选、medium 桶第 2 号候选、heavy 桶第 0 号候选。
+
+**第三步，玩家不做别的事，立刻再打出一张预报牌**：按 ReseedImpact.md §1 已确认的"一次预报消耗 3 个本地计数器单位"，这次触发时喂给重播种公式的 `action_id` 变成 `10+3=13`：
+
+```
+seed = 1000000000 + 13*19390 = 1000251870
+```
+
+重复第二步的三次调用，结果是 light=0、medium=0、heavy=0——跟第一次（1、2、0）相比，light 和 medium 的下标变了，heavy 没变（这次示例里恰好前后两次 heavy 都落在下标 0，属于这组具体数字的巧合，不是普遍规律，因为本示例统一假设三档桶大小都是 3，不是真实的 NZ33 环形小组结构）。
+
+这个计算过程完全可以用 §4.2 那四行反编译出的公式重新算一遍验证——本节的作用只是把公式具体落到一组数字上，让"重播种→连续三次 LCG 变换→取下标"这套机制变得可核对，不是用来复现 NZ33 代价表的具体数字（那部分仍是 §4.2 结尾指出的开放问题）。
 
 ### 4.3 小组编号与真实卡牌对照表
 

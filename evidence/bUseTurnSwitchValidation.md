@@ -2,7 +2,7 @@
 
 ## 字段真实名称的来源：游戏自身的蓝图字节码，不是第三方 SDK
 
-真实字段名 `bUseTurnSwitchValidation` 的来源，是**游戏自己序列化在 `.uasset` 里的蓝图字节码**，通过 FModel 反编译直接读出来的——这是游戏自身的数据，不依赖任何第三方逆向 SDK（此前一版文档误引用了 Dumper-7 生成的 SDK 头文件作为佐证，已经去掉；那份 SDK 本身也是从同一套 UE 反射系统里导出的，参考意义不大，直接看游戏自己的蓝图数据即可）：
+真实字段名 `bUseTurnSwitchValidation` 的来源，是**游戏自己序列化在 `.uasset` 里的蓝图字节码**，通过 FModel 反编译直接读出来的——这是游戏自身的数据，不依赖任何第三方逆向 SDK：
 
 蓝图节点在调用一个原生 `UPROPERTY` 时，`.uasset` 里存的是对这个属性的 **`FName` 引用**（属性名本身作为反射元数据的一部分，序列化在蓝图资产里，供蓝图虚拟机在运行时按名字解析），FModel 反编译时会把这个引用还原成源码里的标识符名字。也就是说，`BP_OnlineMatch.cpp`、`BP_Board.cpp` 等反编译文件里出现的 `bUseTurnSwitchValidation` 这个名字，就是蓝图数据本身记录的名字，跟 `AMatchControllerV2` 的 `0x7A8` 偏移，是同一个原生 bool 字段的两种不同来源的观察——一个是"蓝图侧怎么引用它"，一个是"native 内存布局里它在哪"。
 
@@ -31,15 +31,15 @@
 
 偏移 `0x7A8`、类型 `Bool`，跟 IDA 里手动重建的字段完全对上。**结论**：字段名 `bUseTurnSwitchValidation` 现在有两条独立证据链——① 游戏自己的蓝图字节码引用（`.uasset` 数据本身）；② 对运行中进程做的反射转储（`GObjects-Dump-WithProperties.txt`）——两者互相印证，且都不依赖任何逆向 SDK 的头文件产出物。
 
-### 顺带发现：这次转储也暴露了此前 IDA 结构体重建里的几处命名/结构误差
+### `AMatchControllerV2` 在 `0x7A8` 附近的真实字段布局
 
-对比这份转储和此前 IDA 会话重建的 `AMatchControllerV2_Layout`：`0x7A9` 此前记为 `bMulliganAsActions`，真名是 `bUseActionsForMulligan`；`0x7AA` 此前是无名的 1 字节 gap，真名是 `bUseLocalSubActions`；`0x7AB` 此前记为 `bResyncInProgress`，真名是 `isResyncingMatch`（语义一致，名字不同）；更值得注意的是 `0x7B0` 起，此前曾猜测为几个独立字段（`BaseUrlA`/`MatchTypeName`/`MatchId`/`ConnectionStatus`/`BaseUrlB`），但转储显示这里实际是一个完整的 `StructProperty match`（一直到 `0x8B0` 的 `StartingData` 为止，约 256 字节）——说明这一段此前是被错误地拆成几个零散字段猜的，真实布局是一个内嵌结构体。这部分布局分析的修正本身超出本文档范围，留作后续工作，此处先如实记录下来，避免后续研究误用旧的猜测字段名。
+`0x7A8` 起依次是 4 个 `BoolProperty`：`bUseTurnSwitchValidation`（`0x7A8`）、`bUseActionsForMulligan`（`0x7A9`）、`bUseLocalSubActions`（`0x7AA`）、`isResyncingMatch`（`0x7AB`）；`0x7B0` 起是一个完整的 `StructProperty match`（一直到 `0x8B0` 的 `StartingData` 为止，约 256 字节），不是几个独立的散字段。这份布局以 Dumper-7 反射转储为准，后续研究引用这段偏移时应使用这里的字段名。
 
 ## 蓝图侧只读，从未被赋值
 
 在能拿到的全部反编译蓝图源码里搜索 `bUseTurnSwitchValidation`，命中 4 个文件，全部是**读取**，没有一处赋值：
 
-- `Content/Blueprints/Logic/BP_OnlineMatch.cpp:24524`（`SetRandomStreamWithActionID`，见 README.md §2.2）
+- `Content/Blueprints/Logic/BP_OnlineMatch.cpp:24524`（`SetRandomStreamWithActionID`，见 README.md §2.2；完整原文见 [evidence/fmodel-excerpts/SetRandomStreamWithActionID.cpp](fmodel-excerpts/SetRandomStreamWithActionID.cpp)）
 - `Content/Blueprints/BP_Board.cpp:4413`
 - `Content/Blueprints/Cards/BP_HandCard.cpp`
 - `Content/Blueprints/Logic/BP_VisualController.cpp`
@@ -51,14 +51,14 @@
 按要求沿着 IDA 继续查了三条路，全部指向同一个结论：
 
 1. **`AMatchControllerV2` 的全部 `exec*`（54 个）里没有构造函数**——列出的都是 `BlueprintCallable UFUNCTION` 的 native 入口，构造函数不是 `UFUNCTION`，不会生成 `exec*` 名字，在反汇编数据里目前也没有被单独识别/命名出来。
-2. 转而检查两个最可能"重置成默认值"的候选——`MatchControllerV2_ResetVariables_Impl`（`0x144b05910`）和 `MatchControllerV2_ResetVariablesForResync_Impl`（`0x144b05bc0`），两个函数都已完整反编译并按同一偏移布局解读过。逐行确认：两者都会清零/重置一大堆字段（`ActionCounter3228`、`PendingActionQueue_*`、`DeckArray_*`、`ActionLogTablePtr` 哈希表、`bIsReconnecting`/`bResyncInProgress` 等等），**但都不触碰 `0x7A8`**。
+2. 转而检查两个最可能"重置成默认值"的候选——`MatchControllerV2_ResetVariables_Impl`（`0x144b05910`）和 `MatchControllerV2_ResetVariablesForResync_Impl`（`0x144b05bc0`），两个函数都已完整反编译并按同一偏移布局解读过。逐行确认：两者都会清零/重置一大堆字段（`ActionCounter3228`、`PendingActionQueue_*`、`DeckArray_*`、`ActionLogTablePtr` 哈希表、`bIsReconnecting`/`bResyncInProgress` 等等），**但都不触碰 `0x7A8`**。完整原文见 [evidence/ida-excerpts/ResetVariables_Impl.c](ida-excerpts/ResetVariables_Impl.c)。
 3. 最关键的一步：用交叉引用查询（`xrefs_to_field`）直接查"整个反汇编数据里有没有任何机器码访问过 `AMatchControllerV2` 的 `0x7A8` 偏移"，返回**空结果——零个交叉引用**。
 
 三条路径互相印证同一个结论：**这个字段在 native 机器码层面，没有任何一处硬编码的"读/写偏移 `0x7A8`"指令**。结合第一节已经确认的"蓝图侧只读、没有赋值节点"，这意味着它的值既不是蓝图设的，也不是被任何一段能反汇编到的原生代码用形如 `a1->bUseTurnSwitchValidation = x` 这样的直接偏移赋值设的。
 
 这不是"还没找到"，而是可以给出一个具体、合理的解释：UE 的 `UPROPERTY` 默认值，本来就不是通过"某个函数里硬编码 `mov byte ptr [rax+7A8h], 1`"这种方式设置的——UHT 生成的类默认对象（CDO）构造过程，是通过反射系统按 `FProperty` 遍历、用属性自身携带的元数据初始化的；如果这个值还会被配置文件（`.ini`）或服务端下发的对局配置动态覆盖，那也是走一个**通用的、按属性名/`FProperty*` 查找的赋值路径**（同一段代码要能处理成百上千个不同属性，不可能给每个属性各写一条硬编码偏移的赋值指令）。这类"通用反射式赋值"在设计上就是不出现在针对某个具体偏移的 xref 搜索结果里的——所以"静态反汇编搜遍这个二进制,找不到显式赋值点"本身就是这类机制存在时的预期表现，而不是分析没做到位。
 
-**结论**：截至目前，这个开关的值来自 native 反射式默认值/配置系统这一判断，有了三条独立的 IDA 证据支持（exec 函数列表为空、两个"重置"函数都不碰它、结构体字段 xref 为零），不再是单纯的"没找到，所以不知道"。具体默认值是 true 还是 false，原本认为只能靠动态调试坐实——但见下一节，已经从真实抓包里直接找到了答案，不再需要动态调试。
+**结论**：这个开关的值来自 native 反射式默认值/配置系统，有三条独立的 IDA 证据支持（exec 函数列表为空、两个"重置"函数都不碰它、结构体字段 xref 为零）。具体默认值是 true 还是 false，见下一节的真实抓包证据。
 
 ## 决定性证据：真实抓包里，服务端直接把这个值原样返回给客户端
 
@@ -79,7 +79,7 @@
 
 第 2 条是最强的证据：这不是一个抽象的全局配置项，而是**这一局对局自己的引导数据**里明确带着的字段，值是 `true`。结合第一节确认的"蓝图侧只读，找不到赋值节点"和上一节"native 侧也找不到硬编码赋值点"——这正好对上：这个值不是写死在客户端代码里的常量，而是**由服务端按每局对局下发**，客户端原生代码大概率就是把这个服务端下发的字段，通过反射系统直接写进了 `AMatchControllerV2::bUseTurnSwitchValidation`（这也是为什么静态反汇编搜不到硬编码赋值点——赋值路径是"从网络响应 JSON 按字段名反射写入"，不是"某处代码写死了 0x7A8"）。
 
-**结论（更正为确定性结论）**：这两份真实抓包覆盖的对局（均为 `training`/AI 单机对局）里，`validate_turn_switches` 实际值是 **`true`（开启）**——也就是说，`SetRandomStreamWithActionID` 的重播种分支**在真实对局里是被启用的，不是被跳过的**。README.md §4.1 此前"统一结论"部分假设的"`bUseTurnSwitchValidation == false`、全场只播种一次"这个前提，在这两份真实抓包对应的对局类型下**是不成立的**——需要按这个新证据重新审视 Weather.md/SpyRing.md 里以"从未重播种"为主线的解释，具体影响见 [ReseedImpact.md](../ReseedImpact.md)（已根据这条证据更新其"目前不知道是哪种模式"的结论）。
+**结论**：这两份真实抓包覆盖的对局（均为 `training`/AI 单机对局）里，`validate_turn_switches` 实际值是 **`true`（开启）**——也就是说，`SetRandomStreamWithActionID` 的重播种分支**在真实对局里是被启用的，不是被跳过的**。具体影响见 [ReseedImpact.md](../ReseedImpact.md)。
 
 抓包直接覆盖的只有 `match_type: "training"`（人机单机局）。PvP 天梯对局同样启用这个开关，已由持有账号、能直接在天梯对局中核实的本项目所有者确认——不是抓包证据，是直接确认。这个值是服务端按每局对局下发的字段（第 82 行已确认，不是客户端硬编码常量），所以只有 `training`/PvP 天梯之外的赛制（如锦标赛）取值仍未确认，需要那类赛制的真实抓包或直接确认才能补齐（见 [ReseedImpact.md](../ReseedImpact.md) §4）。
 

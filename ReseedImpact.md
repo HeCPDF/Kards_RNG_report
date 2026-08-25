@@ -2,7 +2,7 @@
 
 真实抓包已经确认（[README.md](README.md) §2.2-2.3、[evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)、[evidence/action_id-real-capture-sequence.md](evidence/action_id-real-capture-sequence.md)、[evidence/local-vs-confirmed-action-id.md](evidence/local-vs-confirmed-action-id.md)）：`bUseTurnSwitchValidation` 在真实对局里是开启的，`cardsRandomStream` 每次创建/确认动作都会重播种为 `match_id + CurrentActionId * 19390`。反编译进一步确认：真正喂给重播种公式的 `CurrentActionId` 字段，与提交请求 JSON 里的 `action_id` 字段（`Counter3228`，只数己方构造动作、从 1 连续递增）是原生代码里两个不同的字段——完整区分见 [evidence/two-distinct-action-id-counters.md](evidence/two-distinct-action-id-counters.md)。`CurrentActionId` 由 `GetNextAction_Impl` 回放双方合并动作日志推进，不区分动作归属方（见 [evidence/CurrentActionId-increment-logic.md](evidence/CurrentActionId-increment-logic.md)）。本文以下用"本地计数器"统一指代喂给重播种公式的 `CurrentActionId`。
 
-社区操作计数方法论（两次效果之间双方操作都计入、跨回合生效、按"单位"加权；结束回合仅己方计入）与上述代码行为自洽，完整权重表与来源见 [社区实测记录](社区实测记录.md) §1。早期版本"本地计数器只数我方自己动作、不受对手影响"的表述是错误的，已按 `ActionsReceived` 驱动的合并日志回放结论更正。
+社区操作计数方法论（两次效果之间双方操作都计入、跨回合生效、按"单位"加权；结束回合仅己方计入）与上述代码行为自洽，完整权重表与来源见 [社区实测记录](社区实测记录.md) §1。
 
 ## 1. 社区口径下"1 次预报 = 3 个单位"，与真实抓包数据大致吻合
 
@@ -24,13 +24,21 @@
 
 ## 4. "跨越多次操作的可查表规律"（Weather.md 的代价表、SpyRing.md 的环形游走）
 
-驱动预报/间谍组织等预提交阶段就能看到结果的效果的，是本地计数器（`CurrentActionId`）。上文引言已经更正：这个计数器**不是只数己方动作**——反编译 `GetNextAction_Impl` 确认它由"回放合并动作日志、不区分归属方"的 `ActionsReceived` 消化循环推进；社区测试方法论同样明确"双方操作都计入"（[社区实测记录](社区实测记录.md) §1），两条独立证据链指向同一结论。所以社区计算天气/间谍组织规律时，数的是"从某个已知基准点起，双方一共做了多少（加权后的）操作"，不是"我自己做了多少操作"——早期版本"KARDS 是回合制、对方不会插入新动作，所以只数自己回合内的操作也对得上"这个论证虽然在"只看自己单个回合内"这个特殊场景下不会出错，但作为通用解释是不必要的：真正的机制本来就是双方都计入，不需要局限于"自己回合内"这个前提。社区规律中"以操作次数分段、超过阈值后行为整体切换"的现象（如"指令数大于 3 时 A/B 两档编号同时升一，持续到第 4 次预报"，见 [社区实测记录](社区实测记录.md) §2.1），本质上就是在描述这个（双方合计、加权后的）本地计数器的某种函数。
+驱动预报/间谍组织等预提交阶段就能看到结果的效果的，是本地计数器（`CurrentActionId`）。这个计数器**不是只数己方动作**——反编译 `GetNextAction_Impl` 确认它由"回放合并动作日志、不区分归属方"的 `ActionsReceived` 消化循环推进；社区测试方法论同样明确"双方操作都计入"（[社区实测记录](社区实测记录.md) §1），两条独立证据链指向同一结论。所以社区计算天气/间谍组织规律时，数的是"从某个已知基准点起，双方一共做了多少（加权后的）操作"，不是"我自己做了多少操作"。社区规律中"以操作次数分段、超过阈值后行为整体切换"的现象（如"指令数大于 3 时 A/B 两档编号同时升一，持续到第 4 次预报"，见 [社区实测记录](社区实测记录.md) §2.1），本质上就是在描述这个（双方合计、加权后的）本地计数器的某种函数。
 
 ## 5. 对局类型覆盖范围
 
 `bUseTurnSwitchValidation` 是服务端随每场对局引导数据下发的值（README.md §2.2 已用 `xrefs_to_field` 排除了客户端硬编码赋值的可能），不是编译进客户端二进制的常量。本报告直接掌握的抓包只有 `match_type: "training"`（人机单机局）两份，均确认该值为 `true`；**PvP 天梯对局同样启用这个开关，已由持有账号、能直接在天梯对局中核实的本项目所有者确认**——也就是说，重播种机制在 PvP 天梯对局下同样是启用状态，跟 `training` 对局一致。因此本报告 §1-3 的全部结论覆盖 `training` 和 PvP 天梯两类对局；唯一仍未覆盖、且没有已知渠道核实的是锦标赛（tournament）等其他赛制，是否有独立于天梯的配置仍是未知。
 
-## 6. 另见
+## 6. 外部工具（如社区的天气/间谍组织计算器）为什么能算对
+
+第 3 节已经给出了漏洞的因果链：预览结果 = 一个公开确定性公式 `match_id + CurrentActionId × 19390` 喂给 `FRandomStream` 算出来的。这一节只是把这条链路里跟"外部计算器怎么工作"直接相关的部分单独说清楚。
+
+以 [社区实测记录](社区实测记录.md) §2.1 的 NZ33 天气计算器为例，它的输入输出是"当前展示结果 + 目标展示结果 → 需要多少次行动"，不是正向算"给定操作数会得到什么结果"。这个反向查询能成立，是因为 Weather.md/SpyRing.md 从已确认的 LCG 常数推出的离散步长表，本质上描述的是一张图：间谍组织的 5 个国家、天气每档内 3 个小组各 3 个效果，都构成一个环（`环[i] = (起点 + k×i) mod 环长`），每次计入的操作沿环走一个固定量。两个具体结果就是环上的两个节点，节点间的最短路径（走几步、哪个方向）只取决于环的结构，跟这两个结果各自对应的 `CurrentActionId` 绝对值无关——所以只输入两个展示结果就能反查出行动次数，不需要额外知道对局进行到第几步。
+
+另外两点是这条链路里已确认、值得一并记一下的背景：种子公式（`FRandomStream` + `match_id` + `19390`）本身没有服务端私钥，`match_id` 在对局引导数据里就是明文；`CurrentActionId` 由 `GetNextAction_Impl` 回放双方合并动作日志推进，只在处理一次 `/actions` 轮询回包时更新，轮询要么每 5 秒一次，要么被服务端 websocket 广播的 `matchaction` 通知（任意一方提交新动作后双方都会收到）立即触发（见 [evidence/CurrentActionId-increment-logic.md](evidence/CurrentActionId-increment-logic.md)）。这两点解释的是"预报结果是怎么被计算出来的"，NZ33 这类工具用到的主要是上一段说的环形结构本身。
+
+## 7. 另见
 
 - [README.md](README.md) — 完整机制交叉验证。
 - [Weather.md](Weather.md) — 天气系统源码实现与档位结构。
@@ -40,3 +48,5 @@
 - [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该开关的证据来源。
 - [evidence/action_id-real-capture-sequence.md](evidence/action_id-real-capture-sequence.md) — 服务端权威 `action_id` 真实取值规律。
 - [evidence/local-vs-confirmed-action-id.md](evidence/local-vs-confirmed-action-id.md) — 本地投机计数器 vs 服务端确认编号，两套编号的真实差异（本文档结论的核心证据来源）。
+- [evidence/CurrentActionId-increment-logic.md](evidence/CurrentActionId-increment-logic.md) — `CurrentActionId` 的完整写入路径与轮询/websocket 触发节奏。
+- [evidence/ida-excerpts/](evidence/ida-excerpts/) — 上述结论依据的原始反编译代码摘录（未加工）。

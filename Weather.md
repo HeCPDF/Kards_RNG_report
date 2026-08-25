@@ -83,12 +83,12 @@ public void GetChooseSpawnCards(TArray<UBaseCardObject*>& cards, bool& markAsSee
 要点：
 
 1. 三个 tier 各自独立地在自己的桶内抽一个下标——不是从全体天气卡里抽，而是轻/中/重三次分别抽签，顺序固定为 light→medium→heavy，共消耗 `cardsRandomStream` 三次。
-2. **`_forecastOptions` 不需要被清空——它天生就是空的，这一点已经从调用链上确认**。`GetChooseSpawnCards` 是在哪个对象上被调用的，直接决定了这个问题的答案：反编译 `BP_CardFunctions.cpp:selectCardToDraw`（真正触发这次三选一的入口函数）确认，调用点是 `cardSelecting->GetChooseSpawnCards(...)`（`BP_CardFunctions.cpp:5570`），而 `cardSelecting = GetCardFromID(cardSelectingCardToDraw)`（`BP_CardFunctions.cpp:5550-5552`）——也就是说，`GetChooseSpawnCards` 调用的对象，是"这次触发选择流程的那个具体卡实例"，由它自己独一无二的 `cardID` 查出来的，**不是** `GetAllActiveStaticCards()` 用来扫描标签的那个持久化静态对象。玩家每次抽到/打出一张一级天气代表卡，都是 `CreateCard` 新建出来的一个全新 `UBaseCardObject` 实例，带着自己的 `cardID`；`_forecastOptions` 是这个新实例上的 UPROPERTY，新实例创建时天然是空数组（UE 的默认零值初始化）。也就是说，**"缓存复用"这个分支在正常对局流程里根本不会被触发**——不是某处代码负责清空它，而是每一次触发预报，用来装 `_forecastOptions` 的对象本身就是全新的，没有"上一次的缓存"可言。这跟实测确认的"每次重新预报都是真实的、全新的三连抽"完全吻合，不需要假设任何未定位到的清空逻辑。（第 1 点提到的"检查了 blitz_doctrine/sabotage/heroes_of_the_soviet_union"，此前认为这几张卡实现模式不同，现在看其实是同一件事的另一种体现：它们的 `PossibleCards` 也是各自新实例上的字段，"无条件重新扫描并追加"这个写法之所以不会真的产生重复堆叠，也是因为每次调用发生在不同的新实例上，根本不会重复调用同一个对象两次。）
+2. **`_forecastOptions` 不需要被清空——它天生就是空的，这一点已经从调用链上确认**。`GetChooseSpawnCards` 是在哪个对象上被调用的，直接决定了这个问题的答案：反编译 `BP_CardFunctions.cpp:selectCardToDraw`（真正触发这次三选一的入口函数）确认，调用点是 `cardSelecting->GetChooseSpawnCards(...)`（`BP_CardFunctions.cpp:5570`），而 `cardSelecting = GetCardFromID(cardSelectingCardToDraw)`（`BP_CardFunctions.cpp:5550-5552`）——也就是说，`GetChooseSpawnCards` 调用的对象，是"这次触发选择流程的那个具体卡实例"，由它自己独一无二的 `cardID` 查出来的，**不是** `GetAllActiveStaticCards()` 用来扫描标签的那个持久化静态对象。玩家每次抽到/打出一张一级天气代表卡，都是 `CreateCard` 新建出来的一个全新 `UBaseCardObject` 实例，带着自己的 `cardID`；`_forecastOptions` 是这个新实例上的 UPROPERTY，新实例创建时天然是空数组（UE 的默认零值初始化）。也就是说，**"缓存复用"这个分支在正常对局流程里根本不会被触发**——不是某处代码负责清空它，而是每一次触发预报，用来装 `_forecastOptions` 的对象本身就是全新的，没有"上一次的缓存"可言。这跟实测确认的"每次重新预报都是真实的、全新的三连抽"完全吻合，不需要假设任何未定位到的清空逻辑。（`blitz_doctrine`/`sabotage`/`heroes_of_the_soviet_union` 是同一件事的另一种体现：它们的 `PossibleCards` 也是各自新实例上的字段，"无条件重新扫描并追加"这个写法之所以不会真的产生重复堆叠，也是因为每次调用发生在不同的新实例上，根本不会重复调用同一个对象两次。）
 3. 雨（rain）/风暴（storm）系的 `card_event_rain1_mist`、`card_event_storm1_gale` 是同构实现（把 `subtype.sunny` 换成 `subtype.rain`/`subtype.storm`，逻辑一模一样）。
 
 ### 2.3 候选池大小影响可变性，但不是唯一原因
 
-天气展示结果是否"看起来不变"，根源不在候选池大小，而是本地计数器在两次预报之间推进了多少单位、跟第 4.2 节离散步长表之间的模运算关系——完整推导见 [ReseedImpact.md](ReseedImpact.md) §1、本文 §4.2。**"一次预报固定消耗 3 个单位"这个具体数字，此前是从动作创建链反编译推出的，但 [evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md) 的真实对局抓包显示预报实际只产生两个可观测的提交动作（类型选择、强度选择），中间预期的"自动打出"提交动作没有出现——这个具体数字目前需要重新用受控测试核实，ReseedImpact.md §1 已同步标注这一点**。
+天气展示结果是否"看起来不变"，根源不在候选池大小，而是本地计数器在两次预报之间推进了多少单位、跟第 4.2 节离散步长表之间的模运算关系——完整推导见 [ReseedImpact.md](ReseedImpact.md) §1、本文 §4.2。**一次预报固定消耗的单位数目前只能确认下限**：[evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md) 的真实对局抓包显示预报实际只产生两个可观测的提交动作（类型选择、强度选择），至少消耗 2 个单位，第三步（自动打出）是否单独计数尚不确定，需要受控测试核实。
 
 ## 3. 核心结论：天气结果是确定性序列
 
@@ -121,13 +121,15 @@ result = (v13 >> 9) | 0x3F800000;                     // GetFraction()：取高 
 v14 = v11 + (int)(float)((float)(*(float *)&result - 1.0) * (float)v12);   // Min + floor(GetFraction()*(Max-Min+1))
 ```
 
+（完整反编译原文，含 UE 蓝图 VM 参数解包样板代码，见 [evidence/ida-excerpts/RandomIntegerInRangeFromStream.c](evidence/ida-excerpts/RandomIntegerInRangeFromStream.c)；`GetChooseSpawnCards` 的完整蓝图字节码原文见 [evidence/fmodel-excerpts/GetChooseSpawnCards.cpp](evidence/fmodel-excerpts/GetChooseSpawnCards.cpp)）
+
 这不是从 UE5.6 引擎源码推断或假设出来的公式，是直接从这个二进制文件（Kards 使用的 UE5.6 fork）反汇编读出来的字节码，逐条对应上面四行 C 伪代码——常数 `196314165`、`907633515` 已用 `find_bytes` 在整个二进制里定位（命中 `0x140eaf4b2` 等多处，包括这个函数本身），确认这个 fork 没有修改这两个 LCG 常数。每次调用 `RandomIntFromRangeWithStream`，`Seed` 恰好做一次这样的变换，返回值恰好是这一次变换后的结果——没有隐藏的多次调用或额外处理。
 
 `GetChooseSpawnCards`（`card_event_sunny1_blue_sky.cpp:93-209`，蓝图，FModel 反编译确认）对 light/medium/heavy 三个候选池依次各调用一次 `RandomIntFromRangeWithStream`，顺序固定；`SetRandomStreamWithActionID`（`BP_OnlineMatch.cpp:24520-24536`，蓝图，FModel 反编译确认）把 `cardsRandomStream` 重播种为 `match_id + action_id * 19390`——这两点前面章节已经交叉确认过，不再重复。
 
 以上是本报告目前能够从 IDA/FModel 直接确认、无需任何额外假设的全部内容。
 
-**数组下标↔小组编号的对应关系——已经确定，不需要运行时内存读取**。`GetAllStaticCardsSortedByName` 最终排序核心（IDA 反编译 `sub_144B14100`→比较函数 `sub_14137F890`→`sub_141376EA0`，地址 `0x141376EA0`）确认：比较的是两张卡各自的 `Name` 属性对应的 `FNameEntry` 字符串内容，落到 `sub_141215A10`/`sub_141215870`（宽/窄字符串比较，按长度截断后再比较剩余长度）——这是标准的、不区分大小写的字典序字符串比较，不涉及任何运行时才能确定的隐藏状态。`GetChooseSpawnCards` 本身的填桶逻辑（`card_event_sunny1_blue_sky.cpp:100-203`，已反编译）确认：`_lightWeatherCards`/`_mediumWeatherCards`/`_heavyWeatherCards` 各自只收集"同时带 `subtype.sunny`（或 rain/storm）标签 **且** 带对应档级标签"的卡，也就是说每个桶只包含**同一天气类型、同一档级下的 3 个候选变体**（例如 light 桶只装 `sunny2_heatwave`/`sunny2_heatwave2`/`sunny2_heatwave3` 三张），桶内保留 `GetAllActiveStaticCards` 已经排好的顺序。这三个候选的资产名恰好是"无后缀 / 加`2` / 加`3`"，按标准字典序比较，无后缀的字符串永远排在有后缀的前面（因为它是后者的真前缀），`"...2"` 又天然小于`"...3"`——所以**数组下标 0/1/2 严格对应候选变体编号 1/2/3，这是一个必然成立的字符串排序结果，不依赖任何运行时状态，也不需要逐字段读取内存来验证**。
+**数组下标↔小组编号的对应关系——已经确定，不需要运行时内存读取**。`GetAllStaticCardsSortedByName` 最终排序核心（IDA 反编译 `sub_144B14100`→比较函数 `sub_14137F890`→`sub_141376EA0`，地址 `0x141376EA0`）确认：比较的是两张卡各自的 `Name` 属性对应的 `FNameEntry` 字符串内容，落到 `sub_141215A10`/`sub_141215870`（宽/窄字符串比较，按长度截断后再比较剩余长度）——这是标准的、不区分大小写的字典序字符串比较，不涉及任何运行时才能确定的隐藏状态（`sub_141376EA0` 原文见 [evidence/ida-excerpts/StaticCardNameCompare.c](evidence/ida-excerpts/StaticCardNameCompare.c)）。`GetChooseSpawnCards` 本身的填桶逻辑（`card_event_sunny1_blue_sky.cpp:100-203`，已反编译）确认：`_lightWeatherCards`/`_mediumWeatherCards`/`_heavyWeatherCards` 各自只收集"同时带 `subtype.sunny`（或 rain/storm）标签 **且** 带对应档级标签"的卡，也就是说每个桶只包含**同一天气类型、同一档级下的 3 个候选变体**（例如 light 桶只装 `sunny2_heatwave`/`sunny2_heatwave2`/`sunny2_heatwave3` 三张），桶内保留 `GetAllActiveStaticCards` 已经排好的顺序。这三个候选的资产名恰好是"无后缀 / 加`2` / 加`3`"，按标准字典序比较，无后缀的字符串永远排在有后缀的前面（因为它是后者的真前缀），`"...2"` 又天然小于`"...3"`——所以**数组下标 0/1/2 严格对应候选变体编号 1/2/3，这是一个必然成立的字符串排序结果，不依赖任何运行时状态，也不需要逐字段读取内存来验证**。
 
 **离散步长表：本地计数器每推进 `d` 个单位，各档展示下标怎么变**。跟 SpyRing.md §3 同样的方法（把 `Δ_seed(d) = d×19390×A^k mod 2^32` 代入离散化规则，`A^k` 换成对应档位的变换深度：light 是 `A^1`，medium 是 `A^2`，heavy 是 `A^3`），逐个整数 `d`（本地计数器步进量）测出每档在每个 `d` 下的**离散下标步长分布**（20000 次采样）：
 
@@ -220,5 +222,5 @@ seed = 1000000000 + 13*19390 = 1000251870
 - [README.md](README.md) — 完整的对局生命周期随机数机制报告（播种时机、重播种触发条件、`cardsRandomStream` 全部已知消费点、动作类型与提交流程）。
 - [SpyRing.md](SpyRing.md) — 用同一套随机流机制解释"间谍组织"卡的环形分布规律，方法论上和本文互为印证。
 - [社区实测记录](社区实测记录.md) — 社区操作计数方法论、NZ33 计算器与社区实测数据（非主证据）。
-- [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该原生字段的命名更正与真实取值证据。
+- [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该原生字段的真实取值证据。
 - [ReseedImpact.md](ReseedImpact.md) — 重播种机制如何逐条解释每一个已观察到的现象。

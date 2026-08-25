@@ -54,7 +54,7 @@ private void SetRandomStreamWithActionID(int inputActionID) {
 }
 ```
 
-这个函数受 `AMatchControllerV2::bUseTurnSwitchValidation`（native `+0x7A8`）控制。蓝图代码里这个字段只被读取、从未被赋值；原生反汇编里也找不到任何硬编码的赋值指令（`xrefs_to_field` 查询返回零结果）——真正的原因是这个值由服务端按局下发，客户端通过反射系统写入，不是写死在代码里的常量。**真实抓包已经直接确认了下发的值**：对局引导数据（bootstrap）末尾明文带着 `"validate_turn_switches":true`，字段名跟这个原生属性高度对应。也就是说，在真实的 `training`（人机单机）对局里，这个重播种分支**是开启的**——每次创建/确认一个动作，`cardsRandomStream` 都会被重新播种。完整证据见 [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)。PvP 天梯对局同样开启该开关（由持有账号的本项目所有者直接核实）；锦标赛等其他赛制是否配置不同仍未覆盖，见 §7。
+这个函数受 `AMatchControllerV2::bUseTurnSwitchValidation`（native `+0x7A8`）控制。蓝图代码里这个字段只被读取、从未被赋值；原生反汇编里也找不到任何硬编码的赋值指令（`xrefs_to_field` 查询返回零结果）——真正的原因是这个值由服务端按局下发，客户端通过反射系统写入，不是写死在代码里的常量。**真实抓包已经直接确认了下发的值**：对局引导数据（bootstrap）末尾明文带着 `"validate_turn_switches":true`，字段名跟这个原生属性高度对应。也就是说，在真实的 `training`（人机单机）以及对局里，这个重播种分支**是开启的**——每次创建/确认一个动作，`cardsRandomStream` 都会被重新播种。完整证据见 [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)。PvP 天梯对局同样开启该开关（由持有账号的本项目所有者直接核实）；锦标赛等其他赛制是否配置不同仍未覆盖，见 §7。
 
 有两个调用点：
 
@@ -67,7 +67,7 @@ SetRandomStreamWithActionID(GetCurrentActionID);
 SetRandomStreamWithActionID(receivedAction.action_id);
 ```
 
-本地在还没提交动作、`action_id` 还是占位符 `-1` 的阶段，就已经用本地预测的 `GetCurrentActionID()` 抢先重播种（这样天气预报卡面才能在提交前就在 UI 上显示结果）；动作真正提交、服务端确认后，会用真实 `action_id` 再重播种一次。如果本地预测计数器在两次触发之间没有正确自增（比如没有走完一次完整的"创建→提交→确认"闭环），两次重播种会用同一个 `action_id`、种子完全相同，结果自然一样——这解释了"同回合内第二次开发结果一样"这个现象。
+本地在还没提交动作、`action_id` 还是占位符 `-1` 的阶段，就已经用本地预测的 `GetCurrentActionID()` 抢先重播种（这样天气预报卡面才能在提交前就在 UI 上显示结果）；动作真正提交、服务端确认后，会用真实 `action_id` 再重播种一次。
 
 ### 2.3 `action_id` 有三层需要分清：服务端权威序列、JSON 提交包里的字段、真正喂给随机数种子的字段
 

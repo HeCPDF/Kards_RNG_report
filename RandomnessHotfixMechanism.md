@@ -17,8 +17,9 @@
 
 - 全局功能开关列表：[`evidence/kards-live-session-api-response.json`](evidence/kards-live-session-api-response.json)（`/session` 接口的真实响应，`server_options` 字段是一段二次 JSON 编码的字符串，解码后共 149 个键）里能找到跟原证据文档同一批相邻字段——`feature_socketerror_popup_enabled`、`feature_collection_cardhelpcache`、`monitor_battle` 都还在——**但 `validate_turn_switches` 这个键完全不存在了**，不是被设成 `0`，是这个键本身没有了。
 - 单局对局的引导数据：两场刚开始的新对局（`match_id=1216112469`、`1216115254`，均为 `training`/人机对局）的完整 `match_and_starting_data` 响应体，顶层只有这一个键，末尾没有任何 `validate_turn_switches` 字段——跟原证据文档"末尾原样回显"的格式对比，这个字段整个从响应体里被拿掉了。
+- 独立交叉验证：用另一个抓包工具（Fiddler，跟原证据文档 2026-08-14 抓包用的是同一款工具）、在实际使用中的账号上单独抓了一份 `/session` 响应（[`evidence/kards-live-session-api-response-fiddler-2026-08-26.json`](evidence/kards-live-session-api-response-fiddler-2026-08-26.json)），跟旧版本逐键比对全部 149 个键——**唯一的差异就是 `validate_turn_switches` 被移除，其余 148 个键一个不多一个不少**。这排除了"只是这次抓包工具/账号凑巧漏看了这个字段"的可能，也排除了"整个功能开关列表被大范围重构、我们只是碰巧注意到这一处"的可能——改动精确地只涉及这一个字段。
 
-两个独立来源同时、完全地失去同一个字段，不太可能是巧合或者字段改名——最直接的解释就是服务端不再下发这个字段。
+三个独立来源（两种抓包工具、两个不同账号、两类接口）同时、完全地失去同一个字段，不太可能是巧合或者字段改名——最直接的解释就是服务端不再下发这个字段。
 
 ## 3. 为什么"不发这个字段"就足够构成修复
 
@@ -78,5 +79,6 @@ private void SetRandomStreamWithActionID(int inputActionID) {
 - [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该字段的完整证据链（旧值确认为开启）。
 - [evidence/kards-live-session-api-response-2026-08-14.json](evidence/kards-live-session-api-response-2026-08-14.json) — 调整前的全局功能开关列表真实抓包，用于跟调整后的版本对照。
 - [evidence/kards-live-session-api-response.json](evidence/kards-live-session-api-response.json) — 调整生效后的全局功能开关列表真实抓包。
+- [evidence/kards-live-session-api-response-fiddler-2026-08-26.json](evidence/kards-live-session-api-response-fiddler-2026-08-26.json) — 独立用 Fiddler 在实际使用账号上抓的第二份调整后抓包，逐键比对确认唯一差异就是这个字段。
 - [Weather.md](Weather.md) §3 — 天气系统的官方说明与调整后状态。
 - [SpyRing.md](SpyRing.md) §4.1、§6 — 环形游走规律与调整后状态。

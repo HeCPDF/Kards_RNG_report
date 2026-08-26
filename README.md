@@ -1,6 +1,6 @@
 # KARDS 对局生命周期随机数机制报告
 
-> **现状（2026-08-25）**：本文描述的操纵手法已被服务端调整关闭，具体原理（撤回 `validate_turn_switches` 字段）见 **[RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md)**。§1-§6 的静态推导和历史抓包证据未被推翻，作为这套机制曾经可被利用的完整技术记录保留。
+> **现状（2026-08-25）**：本文描述的操纵手法已被服务端调整关闭，具体原理（撤回 `validate_turn_switches` 字段）见 **[RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md)**。
 
 来源：FModel 反编译的蓝图伪代码（`Content/Blueprints/`），交叉验证原生实现（IDA，`kards-Win64-Shipping.exe`）与真实抓包（2026-08-14，`training`/AI 单机对局，抓包内容已脱敏）。以下所有行号均指反编译导出的 `.cpp` 伪代码文件。
 

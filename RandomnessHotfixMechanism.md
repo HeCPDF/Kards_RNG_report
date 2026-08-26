@@ -18,7 +18,7 @@
 - 全局功能开关列表：[经过裁剪的2026-8-26的session响应](evidence/kards-live-session-api-response-2026-08-26.json)（用 mitmproxy 和 Fiddler 两种工具分别抓到的响应内容逐字节一致）
 
 
-- 单局对局的引导数据：经过检查，客户端调用服务器对局接口时，已不再发送该标记。
+- 单局对局的引导数据：经过检查，客户端调用服务器对局接口时，已不再发送该标记。这个字段在对局接口那一侧本来就是客户端自己在请求里附上的（[`evidence/bUseTurnSwitchValidation.md`](evidence/bUseTurnSwitchValidation.md)），真正的来源是登录时 `/session` 接口服务端下发的那一份——客户端大概率只是把 session 里拿到的值原样带进每一局的创建请求。既然是登录会话级别下发的一个值，不是按对局类型单独下发的，理论上不管是 `training` 单机、PvP 天梯还是别的模式，只要走同一次登录会话，就会是同一个（缺失的）值——不太可能只对某些模式生效、对另一些模式不生效。
 
 ## 3. 为什么"不发这个字段"就足够构成修复
 
@@ -35,7 +35,7 @@ private void SetRandomStreamWithActionID(int inputActionID) {
 }
 ```
 
-如果服务端不再发这个字段，反射赋值路径就没有源数据可写，这个 `bool` 属性就停在 UE 反射系统的默认值上。只要这个默认值是 `false`（未显式初始化的 `bool` UPROPERTY 常见默认），`SetRandomStreamWithActionID` 就会在每次调用时直接在第一行 `return`——重播种分支从此再也不会执行，`cardsRandomStream` 不再按 `match_id + CurrentActionId*19390` 在每个动作后重置，而是变成从对局开始那一次播种起连续自由推进，被 [README.md](README.md) §5 列出的所有已知消费点（天气预报、间谍组织、护航攻击、洗牌……）共享同一条不断前进的序列，不再是一个非常有规律可循的随机序列。
+如果服务端不再发这个字段，反射赋值路径就没有源数据可写，这个 `bool` 属性就停在 UE 反射系统的默认值上。只要这个默认值是 `false`（未显式初始化的 `bool` UPROPERTY 常见默认），`SetRandomStreamWithActionID` 就会在每次调用时直接在第一行 `return`——重播种分支从此再也不会执行，`cardsRandomStream` 不再按 `match_id + CurrentActionId*19390` 在每个动作后重置，而是变成从对局开始那一次播种起连续自由推进，天气预报、间谍组织等依赖它的卡牌随机效果共享同一条不断前进的序列，不再是一个非常有规律可循的随机序列。
 
 这个改动**完全不需要更新客户端**：没有新增代码路径，没有改写任何一条现有指令，只是服务端少发了一个 JSON 字段，客户端原有的、早就写好的条件分支自己就会走向"跳过重播种"这条路。这与官方说明"已经做出调整使其更难被操纵、不需要更新客户端"的表述完全吻合，也与"客户端本地文件未被修改过"这一前提没有任何冲突——改动完全发生在服务端下发的数据里，不在二进制里。
 
@@ -48,6 +48,8 @@ private void SetRandomStreamWithActionID(int inputActionID) {
 - 用原来"重播种到 `match_id + CurrentActionId*19390`"公式做的多次盲测预测，命中率落在纯随机猜测的期望值附近（3 选 1 的档位，多次预测平均命中率约 22%，见下文）——如果重播种真的完全停止了，这正是预期结果：这条公式本来就不应该再对结果有任何预测力。
 
 **目前更多是定性吻合，还没有精确到数值级别的证明**：要把"连续推进模型"验证到能精确预测具体结果的程度，需要独立确认 UE 里未显式初始化的 `bool` UPROPERTY 默认值确实是 `false`（本文档目前只是援引这是常见约定，没有对这个二进制单独反编译验证），以及完整重建"对局开始到某次预报触发之间，`cardsRandomStream` 一共被调用过多少次"这条计数——后者需要把 README §5 列出的全部消费点都在真实对局里逐一计数，目前没有这样一份完整记录。
+
+**这套验证方法本身还有一个没堵上的漏洞**：真实测试里观察到的"`CurrentActionId` 在一整个回合内都不变，直到回合结束才更新"，本身可能是一个跟这次调整无关的、结构性的固有行为——也就是说，就算调整前（重播种仍然开启的旧版本）也可能同样是"回合内不更新，回合结束才更新"。如果是这样，"同一回合内反复触发、`CurrentActionId` 全程不变、结果却仍然不同"这一条观察，就不能排除是重播种机制本来就有的正常表现，而不是"重播种被关闭"的证据——因为没有一份"确认重播种仍开启的旧版本、同一回合内多次触发预报"的真实数据可以拿来做对照组。本文档目前没有能堵上这个漏洞的数据，是这次分析里最大的一个方法论缺口。
 
 ## 5. 历史线索：间谍组织的环形游走规律，可能正是这个字段被引入之后才出现的
 
@@ -73,14 +75,15 @@ private void SetRandomStreamWithActionID(int inputActionID) {
 
 1. **`bUseTurnSwitchValidation` 的反射默认值是否确实是 `false`**：目前只是从"字段消失+重播种行为消失"反推的合理解释，没有从二进制或 UE 反射元数据里直接确认过这个具体默认值。
 2. **连续推进模型的精确验证**：需要一份从对局开始逐一计数 `cardsRandomStream` 全部消费点调用次数的真实记录，代入 §3 的连续推进假设重新计算，看能否精确复现观察到的档位偏移，而不只是方向上吻合。
-3. **调整的触发条件**：目前只确认了两场 `training` 局的字段缺失，PvP 天梯、锦标赛等其它赛制是否同样缺失，或者调整本身是否分批/按账号灰度下发，尚未覆盖。
+3. **调整是否分批/按账号灰度下发**：直接确认过字段缺失的只有两场 `training` 局，但既然来源是登录会话级别下发的一个值（§2），理论上同一次登录里不管打哪种模式都会是同一个值，不太会出现"这个账号的 PvP 局有、单机局没有"这种按模式区分的情况；没有直接核实的只是这次调整本身是否对所有账号同时生效，还是分批灰度推送。
 4. **§5 的历史猜测是否成立**：需要 Homefront 版本对局引导数据的真实抓包，确认该版本响应体里是否完全没有 `validate_turn_switches` 字段。
+5. **`CurrentActionId` 回合内不变是否本来就是固有行为，跟这次调整无关**：见 §4 末尾——需要一份"确认重播种仍开启的旧版本、同一回合内多次触发预报"的真实数据做对照组，本文档目前没有。
 
 ## 8. 另见
 
 - [README.md](README.md) §2.2、§7 — 重播种公式的完整推导与开放问题列表。
 - [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该字段的完整证据链（旧值确认为开启）。
-- [evidence/kards-live-session-api-response-2026-08-14.json](evidence/kards-live-session-api-response-2026-08-14.json) — 调整前的全局功能开关列表真实抓包，用于跟调整后的版本对照。
-- [evidence/kards-live-session-api-response-2026-08-26.json](evidence/kards-live-session-api-response-2026-08-26.json) — 调整生效后的全局功能开关列表真实抓包（mitmproxy 与 Fiddler 分别抓取，内容逐字节一致）。
+- [evidence/kards-live-session-api-response-2026-08-14.json](evidence/kards-live-session-api-response-2026-08-14.json) — 调整前的全局功能开关列表抓包结果，用于跟调整后的版本对照。
+- [evidence/kards-live-session-api-response-2026-08-26.json](evidence/kards-live-session-api-response-2026-08-26.json) — 调整生效后的全局功能开关列表抓包结果。
 - [Weather.md](Weather.md) §3 — 天气系统的官方说明与调整后状态。
 - [SpyRing.md](SpyRing.md) §4.1、§6 — 环形游走规律与调整后状态。

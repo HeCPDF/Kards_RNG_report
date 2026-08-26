@@ -1,6 +1,6 @@
 # 天气系统：从代码到"可控天气"
 
-来源：FModel 反编译的蓝图伪代码（`Content/Blueprints/`），交叉验证 IDA 反编译的原生实现和 Unreal Engine 5.6 引擎源码。行号均指本仓库 `FModel-Exports/` 下对应的反编译导出文件。核心随机流机制（`cardsRandomStream` 的播种/重播种规则）见 [README.md](README.md) §1-§2，本文只讲天气系统本身怎么用这条流。
+来源：FModel 反编译的蓝图伪代码（`Content/Blueprints/`），交叉验证 IDA 反编译的原生实现和 Unreal Engine 5.6 引擎源码。行号均指本仓库 `FModel-Exports/` 下对应的反编译导出文件。核心随机流机制（`cardsRandomStream` 的播种/重播种规则）见 [README.md](README.md) §1–§2，本文只讲天气系统本身怎么用这条流。
 
 ## 1. `BP_CardFunctions` 里跟预报/随机有关的函数
 
@@ -13,7 +13,7 @@
 | `Forecast(cardTriggeringForecast, out qqq)` | `BP_CardFunctions.cpp:23533` | 打出带 `ability.forecast` 标签的卡牌时调用，本身不产生随机数——它把三张一级天气代表卡（`card_event_sunny1_blue_sky` / `card_event_rain1_mist` / `card_event_storm1_gale`）交给 `NotifySelectCardToDrawPending` 弹面板，由玩家选择天气类型。带该标签的卡包括 J2F 鸭式（战斗机，移入前线时触发）、第 44 特混舰队、美国气象局、阴云密布等若干指令/单位。真正的随机在选中代表卡之后发生，见下一节的 `GetChooseSpawnCards`。 |
 | `GetAllForecastCards(...)` | `BP_CardFunctions.cpp:23084` | 从 `GetAllActiveStaticCards` 里按 `subtype.rain`/`subtype.storm`/`subtype.sunny` 三个 GameplayTag 筛出所有天气系卡牌（不分轻重级），是天气选卡候选池的上游数据源之一。 |
 | `GetRandomCard(cards, skipCustomAlways, out randomCard)` | `BP_CardFunctions.cpp:5248` | 通用的"从一堆卡里随机挑一张"，被非天气类效果复用。天气选卡没有用这个函数，是各天气代表卡自己实现了一遍三段式抽取（见下）。 |
-| `ShuffleDeckBySide` / `DiscardRandomCardFromHand` / `GiveRandomCombatKeyword` | `BP_CardFunctions.cpp:12351` / `6492` / `22523` | 同样走 `cardsRandomStream`，跟天气无关，完整列表见 README §3。 |
+| `ShuffleDeckBySide` / `DiscardRandomCardFromHand` / `GiveRandomCombatKeyword` | `BP_CardFunctions.cpp:12351` / `6492` / `22523` | 同样走 `cardsRandomStream`，跟天气无关，完整消费点列表见 README §4。 |
 
 ## 2. 天气卡怎么实现：以 `card_event_sunny1_blue_sky`（"将是晴天"）为例
 
@@ -42,7 +42,7 @@ struct FGameplayTagContainer GameplayTags = FGameplayTagContainer({
 
 ### 2.2 `GetChooseSpawnCards`：三级天气怎么被选出来
 
-预报是**两次连续的玩家选择**，不是"选一次、其余自动"：① `Forecast()`（§1）把三张一级天气代表卡传给 `NotifySelectCardToDrawPending` 弹面板，玩家选择天气类型；② 选中的一级代表卡因 `autoplay` 自动打出，触发 `OnPlayedFromHand`，进而调用它自己的 `GetChooseSpawnCards`，弹出第二个面板，玩家在轻/中/重三个候选里选一个，决定最终抽到哪张具体的天气效果卡。真实抓包（[evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md)）确认这两步各产生一个连续提交的 `CS` 动作、中间没有独立的"自动打出"动作；这两步在 `CurrentActionId` 上各消耗多少，仍待受控测试单独钉死。
+预报是**两次连续的玩家选择**，不是"选一次、其余自动"：① `Forecast()`（§1）把三张一级天气代表卡传给 `NotifySelectCardToDrawPending` 弹面板，玩家选择天气类型；② 选中的一级代表卡因 `autoplay` 自动打出，触发 `OnPlayedFromHand`，进而调用它自己的 `GetChooseSpawnCards`，弹出第二个面板，玩家在轻/中/重三个候选里选一个，决定最终抽到哪张具体的天气效果卡。真实抓包（[evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md)）确认这两步各产生一个连续提交的 `CS` 动作，中间没有独立的"自动打出"动作。
 
 `sunny1_blue_sky` 自己的 `GetChooseSpawnCards`（`card_event_sunny1_blue_sky.cpp:93-209`）决定轻/中/重三个候选各是谁：
 
@@ -83,27 +83,29 @@ public void GetChooseSpawnCards(TArray<UBaseCardObject*>& cards, bool& markAsSee
 要点：
 
 1. 三个 tier 各自独立地在自己的桶内抽一个下标——不是从全体天气卡里抽，而是轻/中/重三次分别抽签，顺序固定 light→medium→heavy，共消耗 `cardsRandomStream` 三次。
-2. `_forecastOptions` 天生就是空的，那个"缓存复用"分支在正常对局里根本不会被触发。原因在调用链上：反编译 `BP_CardFunctions.cpp:selectCardToDraw`（真正触发三选一的入口）确认，调用点是 `cardSelecting->GetChooseSpawnCards(...)`（`BP_CardFunctions.cpp:5570`），而 `cardSelecting = GetCardFromID(cardSelectingCardToDraw)`（`BP_CardFunctions.cpp:5550-5552`）——也就是说 `GetChooseSpawnCards` 是在"这次触发选择流程的那个具体卡实例"上被调用的，不是 `GetAllActiveStaticCards()` 用来扫描标签的持久化静态对象。玩家每次抽到/打出一张一级天气代表卡，都是 `CreateCard` 新建出来的一个全新 `UBaseCardObject` 实例，`_forecastOptions` 是这个新实例上的字段，新实例创建时天然是空数组（UE 的默认零值初始化）。所以每一次触发预报，用来装 `_forecastOptions` 的对象本身就是全新的，没有"上一次的缓存"可言——这跟每次重新预报都是真实的、全新的三连抽完全吻合。`blitz_doctrine`/`sabotage`/`heroes_of_the_soviet_union` 的 `PossibleCards` 是同一件事的另一种体现。
+2. 那个"缓存复用"分支在正常对局里不会被触发，因为 `_forecastOptions` 每次都是空的。原因在调用链上：`BP_CardFunctions.cpp:selectCardToDraw`（真正触发三选一的入口）的调用点是 `cardSelecting->GetChooseSpawnCards(...)`（`BP_CardFunctions.cpp:5570`），而 `cardSelecting = GetCardFromID(cardSelectingCardToDraw)`（`BP_CardFunctions.cpp:5550-5552`）——`GetChooseSpawnCards` 是在"这次触发选择流程的那个具体卡实例"上被调用的，不是 `GetAllActiveStaticCards()` 用来扫描标签的持久化静态对象。玩家每次抽到/打出一张一级天气代表卡，都是 `CreateCard` 新建出来的一个全新 `UBaseCardObject` 实例，`_forecastOptions` 是这个新实例上的字段，创建时按 UE 的默认零值初始化就是空数组。所以每一次触发预报，装 `_forecastOptions` 的对象本身就是新的，不存在"上一次的缓存"。`blitz_doctrine`/`sabotage`/`heroes_of_the_soviet_union` 的 `PossibleCards` 是同一件事的另一种体现。
 3. 雨（rain）/风暴（storm）系的 `card_event_rain1_mist`、`card_event_storm1_gale` 是同构实现（把 `subtype.sunny` 换成 `subtype.rain`/`subtype.storm`，逻辑一模一样）。
 
-### 2.3 一次预报固定消耗多少单位，目前只有下限
+### 2.3 一次预报固定消耗多少单位，只有下限是确定的
 
-天气展示结果是否"看起来不变"，根源不在候选池大小，而是本地计数器在两次预报之间推进了多少单位、跟 §4.2 离散步长表之间的模运算关系——完整推导见 [ReseedImpact.md](ReseedImpact.md) §1、本文 §4.2。真实对局抓包（[evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md)）显示一次预报只产生两个可观测的提交动作（类型选择、强度选择），至少消耗 2 个单位；第三步（一级代表卡自动打出）是否单独计数尚不确定，需要受控测试核实。
+天气展示结果是否"看起来不变"，根源不在候选池大小，而在于本地计数器在两次预报之间推进了多少单位，以及这个推进量与 §4.2 离散步长表之间的模运算关系——完整推导见 [ReseedImpact.md](ReseedImpact.md) §1、§2 与本文 §4.2。
+
+真实对局抓包（[evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md)）显示一次预报只产生两个可观测的提交动作（类型选择、强度选择），因此至少消耗 2 个单位；第三步（一级代表卡自动打出）是否单独计数，需要受控测试才能确定。
 
 ## 3. 核心结论：天气结果是确定性序列
 
-结合 README.md §2-§4 交叉验证的原生机制和真实抓包证据：
+结合 README.md §1–§3 交叉验证的机制和真实抓包证据：
 
-1. 真实抓包确认，真实对局里 `AMatchControllerV2::bUseTurnSwitchValidation`（native `+0x7A8`）是开启的——对局引导数据明文带着 `"validate_turn_switches":true`（详见 [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)）。这意味着 `cardsRandomStream` 每次创建/确认一个动作都会用 `CurrentActionId` 重播种为 `match_id + CurrentActionId * 19390`；`CurrentActionId` 是本机回放双方合并动作日志的进度游标（README §2.3），与服务端最终确认的、从 1 开始逐一递增的全局动作编号是两套不同的数（详见 [evidence/action_id-real-capture-sequence.md](evidence/action_id-real-capture-sequence.md)）。
-2. 天气预报的三连抽（light→medium→heavy）严格按固定顺序发生，候选池大小、每类天气卡数量都是公开可数的静态信息（活跃卡池全程加载，`GetAllActiveStaticCards` 谁都能枚举）。只要知道 `match_id` 和双方到目前为止一共发生过多少个（加权）动作，理论上就能直接算出结果。
+1. 2026-08-14 的抓包确认，当时的真实对局里 `AMatchControllerV2::bUseTurnSwitchValidation`（native `+0x7A8`）是开启的——对局引导数据明文带着 `"validate_turn_switches":true`（详见 [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)）。这意味着 `cardsRandomStream` 每次创建/确认一个动作都会用 `CurrentActionId` 重播种为 `match_id + CurrentActionId * 19390`；`CurrentActionId` 是本机回放双方合并动作日志的进度游标（README §2.3），与服务端最终确认的、从 1 开始逐一递增的全局动作编号是两套不同的数（详见 [evidence/action_id-real-capture-sequence.md](evidence/action_id-real-capture-sequence.md)）。
+2. 天气预报的三连抽（light→medium→heavy）严格按固定顺序发生，候选池大小、每类天气卡数量都是公开可数的静态信息（活跃卡池全程加载，`GetAllActiveStaticCards` 谁都能枚举）。只要知道 `match_id` 和双方截至当前一共发生过多少个（加权）动作，就能直接算出结果。
 
-天气系统的"伪随机"不是比喻——它是以 `match_id` 为种子、按 `CurrentActionId` 重播种的确定性伪随机数序列，理论上全程可预测。这套机制为什么构成一个可被利用的漏洞、玩家具体怎么操作利用它，见 [ReseedImpact.md](ReseedImpact.md) §2。§4 从引擎源码给出档位结构和精确的离散步长表，§5 把这套纯代码推导跟社区实测数据对照。
+天气系统的"伪随机"不是比喻——它是以 `match_id` 为种子、按 `CurrentActionId` 重播种的确定性伪随机数序列，全程可预测。这套机制为什么构成一个可被利用的漏洞、玩家具体怎么操作利用它，见 [ReseedImpact.md](ReseedImpact.md) §3。下面 §4 从引擎源码给出档位结构和精确的离散步长表，§5 把这套纯代码推导跟社区实测数据对照。
 
-**2026-08-25 起这套机制已经失效**：官方[说明](https://www.kards.com/news/forecast-issue-and-fall-2026-tournament-results)确认已对系统做出调整、且不需要更新客户端；社区反馈调整生效后，以前摸出来的经验规律（NZ33 代价表等）已经不能再稳定复现，真实对局实测也确认本文公式在调整后不能再准确预测结果。原因是服务端不再下发 `validate_turn_switches` 字段，导致上面第 1 条的重播种分支不再触发——完整技术推导见 [RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md)。以下 §4-§5 的推导和证据本身没有被推翻，是这套机制曾经如何运作的完整技术记录。
+**2026-08-25 起这套机制已经失效**：官方[说明](https://www.kards.com/news/forecast-issue-and-fall-2026-tournament-results)确认已对系统做出调整、且不需要更新客户端；调整生效后社区经验规律（NZ33 代价表等）不能再稳定复现，真实对局实测也确认本文公式不再有预测力。原因是服务端不再下发 `validate_turn_switches` 字段，上面第 1 条的重播种分支不再触发——完整技术推导见 [RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md)。以下 §4–§5 的推导和证据不受影响，是这套机制曾经如何运作的技术记录。
 
 ## 4. 档位结构与引擎算法
 
-本节先从反编译源码确认档位/候选池结构（§4.1），再给出引擎算法与数学推导（§4.2、§4.2.1），最后列出官方卡牌对照（§4.3）——全部只用已确认的反编译资料和引擎常数，不引用任何社区数据。跟社区实测（包括 NZ33《天气操作次数计算器》）的对照见 §5。
+本节先从反编译源码确认档位/候选池结构（§4.1），再给出引擎算法与数学推导（§4.2、§4.2.1），最后列出官方卡牌对照（§4.3）。全节只用反编译资料和引擎常数，不引用社区数据；跟社区实测（包括 NZ33《天气操作次数计算器》）的对照放在 §5。
 
 ### 4.1 档位（light/medium/heavy）与候选池
 
@@ -124,11 +126,11 @@ v14 = v11 + (int)(float)((float)(*(float *)&result - 1.0) * (float)v12);   // Mi
 
 （完整反编译原文见 [evidence/ida-excerpts/RandomIntegerInRangeFromStream.c](evidence/ida-excerpts/RandomIntegerInRangeFromStream.c)；`GetChooseSpawnCards` 的完整蓝图字节码见 [evidence/fmodel-excerpts/GetChooseSpawnCards.cpp](evidence/fmodel-excerpts/GetChooseSpawnCards.cpp)）
 
-这是直接从二进制反汇编读出来的字节码，不是从引擎源码推断的。常数 `196314165`、`907633515` 已用字节搜索在整个二进制里定位到多处命中，包括这个函数本身——确认这个 UE5.6 fork 没有修改这两个 LCG 常数。每次调用 `RandomIntFromRangeWithStream`，`Seed` 恰好做一次这样的变换，返回值恰好是这一次变换后的结果，没有隐藏的多次调用。
+以上是从二进制反汇编读出的实际实现，不是照抄引擎源码。常数 `196314165`、`907633515` 已用字节搜索在整个二进制里定位到多处命中，包括这个函数本身，确认这个 UE5.6 fork 没有修改这两个 LCG 常数。每次调用 `RandomIntFromRangeWithStream`，`Seed` 恰好做一次上述变换，返回值恰好是这一次变换的结果，没有隐藏的多次调用。
 
-`GetChooseSpawnCards` 对 light/medium/heavy 三个候选池依次各调用一次 `RandomIntFromRangeWithStream`，顺序固定；`SetRandomStreamWithActionID`（`BP_OnlineMatch.cpp:24520-24536`）把 `cardsRandomStream` 重播种为 `match_id + action_id * 19390`——这两点 §2-§3 已交叉确认过。
+`GetChooseSpawnCards` 对 light/medium/heavy 三个候选池依次各调用一次 `RandomIntFromRangeWithStream`，顺序固定；`SetRandomStreamWithActionID`（`BP_OnlineMatch.cpp:24520-24536`）把 `cardsRandomStream` 重播种为 `match_id + action_id * 19390`（README §2.2）。
 
-**数组下标↔候选变体编号的对应关系**：`GetAllStaticCardsSortedByName` 的排序核心（IDA `sub_144B14100`→`sub_14137F890`→`sub_141376EA0`）比较的是两张卡的 `Name` 属性对应的 `FNameEntry` 字符串，落到标准的、不区分大小写的字典序比较（原文见 [evidence/ida-excerpts/StaticCardNameCompare.c](evidence/ida-excerpts/StaticCardNameCompare.c)）。`_lightWeatherCards`/`_mediumWeatherCards`/`_heavyWeatherCards` 各自只收集"同天气类型 + 同档级"的 3 张候选，桶内顺序沿用 `GetAllActiveStaticCards` 已排好的顺序；这 3 个候选的资产名恰好是"无后缀 / 加`2` / 加`3`"，字典序下无后缀的字符串必然排在有后缀的前面（它是后者的真前缀），`"...2"` 又必然小于`"...3"`——所以数组下标 0/1/2 严格对应候选变体编号 1/2/3。这是字符串排序的必然结果，不依赖任何运行时状态。
+**数组下标↔候选变体编号的对应关系**：`GetAllStaticCardsSortedByName` 的排序核心（IDA `sub_144B14100`→`sub_14137F890`→`sub_141376EA0`）比较的是两张卡的 `Name` 属性对应的 `FNameEntry` 字符串，落到标准的、不区分大小写的字典序比较（原文见 [evidence/ida-excerpts/StaticCardNameCompare.c](evidence/ida-excerpts/StaticCardNameCompare.c)）。`_lightWeatherCards`/`_mediumWeatherCards`/`_heavyWeatherCards` 各自只收集"同天气类型 + 同档级"的 3 张候选，桶内顺序沿用 `GetAllActiveStaticCards` 已排好的顺序；这 3 个候选的资产名恰好是"无后缀 / 加 `2` / 加 `3`"，字典序下无后缀的字符串必然排在有后缀的前面（它是后者的真前缀），`"...2"` 又必然小于 `"...3"`——所以数组下标 0/1/2 严格对应候选变体编号 1/2/3。这只取决于字符串排序，不依赖任何运行时状态。
 
 **离散步长表**：把 `Δ_seed(d) = d×19390×A^k mod 2^32` 代入离散化规则（`A^k` 是对应档位的变换深度：light 是 `A^1`，medium 是 `A^2`，heavy 是 `A^3`，方法同 SpyRing.md §3），逐个整数 `d`（本地计数器步进量）测出每档在每个 `d` 下的离散下标步长分布（20000 次采样）：
 
@@ -138,11 +140,11 @@ v14 = v11 + (int)(float)((float)(*(float *)&result - 1.0) * (float)v12);   // Mi
 | 15 | 0（93.6%） | 0（61.3%） |
 | 18 | -1（52.9%） | 0（53.2%） |
 
-线性同余变换是仿射映射 `f(x)=Ax+C`，两个只差常数 `d` 的种子，变换 `k` 次后的差值精确是 `A^k·d (mod 2^32)`。`A^1 mod 2^32 = 196314165`、`A^2 mod 2^32 = 3026498297` 这两个数不相等，所以 light 和 medium 在"本地计数器每 +1，等效位移多少"这件事上数学上必然不同——`d=3` 一行正是体现：light 主导"跨了一组"（59.0%），medium 主导"没跨组"（92.0%），方向相反；`d=15` 一行两档都以高概率给出"不变"，这不是矛盾，是两条独立的仿射映射曲线在这一点偶然重合。
+线性同余变换是仿射映射 `f(x)=Ax+C`，两个只差常数 `d` 的种子，变换 `k` 次后的差值精确是 `A^k·d (mod 2^32)`。`A^1 mod 2^32 = 196314165`、`A^2 mod 2^32 = 3026498297` 这两个数不相等，所以 light 和 medium 在"本地计数器每 +1，等效位移多少"这件事上必然不同——`d=3` 一行正是体现：light 主导"跨了一组"（59.0%），medium 主导"没跨组"（92.0%），方向相反；`d=15` 一行两档都以高概率给出"不变"，这是两条独立的仿射映射曲线在这一点上的重合，不是矛盾。
 
-**排除了另一种技术性解释：弹窗交互时序**。追踪 `NotifySelectCardToDrawPending`→`HandleSelectCardToDrawPending`（`BP_OnlineMatch.cpp:3920-3934`）→`AddSubActionSelectCardToDrawPending`（`BP_OnlineMatch.cpp:16193-16215+`）的完整调用链确认：这个通知函数只是把已经算好的 `spawnCards`（`GetChooseSpawnCards` 三次抽签的最终结果）打包成一条记录推进队列，是一次性、单向的展示通知，不是"玩家切换预览、重新计算"式的交互循环。UI 层不存在"来回切换类型导致 `GetChooseSpawnCards` 被多次调用"这回事。
+**弹窗交互时序不是变量**：追踪 `NotifySelectCardToDrawPending`→`HandleSelectCardToDrawPending`（`BP_OnlineMatch.cpp:3920-3934`）→`AddSubActionSelectCardToDrawPending`（`BP_OnlineMatch.cpp:16193-16215+`）的完整调用链确认，这个通知函数只是把已经算好的 `spawnCards`（`GetChooseSpawnCards` 三次抽签的最终结果）打包成一条记录推进队列，是一次性、单向的展示通知，不是"玩家切换预览、重新计算"式的交互循环。UI 层不存在"来回切换类型导致 `GetChooseSpawnCards` 被多次调用"这回事。
 
-### 4.2.1 数值示例（虚构数字，不是真实抓包）
+### 4.2.1 数值示例（示例数字，非抓包数据）
 
 假设 `match_id = 1000000000`，玩家触发预报时喂给 `SetRandomStreamWithActionID` 的 `CurrentActionId = 10`：
 
@@ -158,7 +160,7 @@ v14 = v11 + (int)(float)((float)(*(float *)&result - 1.0) * (float)v12);   // Mi
 
 即这次预报玩家会看到 light 桶第 1 号候选、medium 桶第 2 号候选、heavy 桶第 0 号候选。
 
-假设一次预报固定消耗 3 个本地计数器单位（示例假设值，实测下限见 §2.3），下一次触发时 `CurrentActionId = 13`，`seed = 1000000000 + 13*19390 = 1000251870`，重复三次调用得到 light=0、medium=0、heavy=0——跟第一次相比 light 和 medium 变了，heavy 没变（这是这组具体数字的巧合，不是规律：真实候选池大小不一定是 3，本例只是为了让计算过程可复现）。
+再假设一次预报固定消耗 3 个本地计数器单位（示例假设值，实测下限见 §2.3），下一次触发时 `CurrentActionId = 13`，`seed = 1000000000 + 13*19390 = 1000251870`，重复三次调用得到 light=0、medium=0、heavy=0——跟第一次相比 light 和 medium 变了，heavy 没变。这是这组具体数字的巧合，不是规律；本例只是为了让计算过程可复现。
 
 ### 4.3 档位/候选编号与真实卡牌对照表
 
@@ -176,11 +178,11 @@ v14 = v11 + (int)(float)((float)(*(float *)&result - 1.0) * (float)v12);   // Mi
 | 6K | 8 | `sunny4_scorching_sun2` 骄阳 SCORCHING SUN — 所有友方单位 +3/+3 | `rain4_monsoon_rain2` 季风雨 MONSOON RAIN — 将所有单位的攻击力、防御力和行动花费设为 2 | `storm4_cyclone2` 旋风 CYCLONE — 对目标敌方单位造成 6 点伤害，对相邻敌方单位造成 2 点伤害 |
 | 6K | 9 | `sunny4_scorching_sun3` 骄阳 SCORCHING SUN — 友方空军获得等同于其行动花费的攻击力，然后将所有友方单位的行动花费设为 0 | `rain4_monsoon_rain3` 季风雨 MONSOON RAIN — 友方步兵单位 +2/+2，且可再次行动 | `storm4_cyclone3` 旋风 CYCLONE — 所有单位撤退 |
 
-同一行（候选编号，本表"小组"列）内晴/雨/风共享同一个抽签得出的下标——即同一次触发预报，light 档抽到的下标决定了这一行里晴/雨/风哪一个候选被选中。跟社区实测代价表的对照见 §5。
+同一行（候选编号，本表"小组"列）内晴/雨/风共享同一个抽签得出的下标——即同一次触发预报，light 档抽到的下标决定了这一行里晴/雨/风哪一个候选被选中。
 
 ## 5. 与社区实测的对照
 
-以上 §1-§4 的全部推导只用已确认的反编译资料、IDA 字节码和 LCG 引擎常数，没有用任何社区数据。现在拿这些结果去对照社区独立实测出的规律。
+§1–§4 的推导只用反编译资料、IDA 字节码和 LCG 引擎常数，没有用社区数据。本节拿这些结果去对照社区独立实测出的规律。
 
 ### 5.1 NZ33《天气操作次数计算器》
 
@@ -194,17 +196,22 @@ v14 = v11 + (int)(float)((float)(*(float *)&result - 1.0) * (float)v12);   // Mi
 
 社区还给出周期数字：2K、4K 天气都是 18 个（社区单位）操作一循环，6K 天气是 3 个（社区单位）操作一循环；最简操作数可按循环数整数倍叠加（`+18x` 或 `+3x`）。完整数据见 [社区实测记录](社区实测记录.md) §2.1。
 
-用 §4.2 的离散步长表核对：`d=15` 时，light 和 medium 两档的主导步长都是 `0`（同组、结果不变），跟 NZ33 报告的"2K、4K 同组代价都是 15"直接吻合。但 `d=3`（NZ33 报告的"顺时针跨组代价"）在两档上对不上——light 在 `d=3` 的主导步长是 `-1`（跨了一组，59.0%），medium 在 `d=3` 的主导步长却是 `0`（没跨组，92.0%）。`d=15` 一项的吻合加上 `d=3` 一项的矛盾，把"整张表都对不上"这种笼统说法收窄成了具体的"哪一项对不上"：驱动展示结果的确定性机制本身已经确认无误（§4.2 已排除"重播种发生多次"和"弹窗交互时序影响变换深度"两种候选解释），"同组"这一项数字有了扎实的引擎层解释，"跨组"这一项仍未解释——可能来源包括 NZ33 数据本身的精确度（本报告没有独立核实过其原始测试数据），或者"跨天气类型触发预报"这类目前没有建模进来的变量。
+用 §4.2 的离散步长表核对，结果是一项吻合、一项矛盾：
+
+- **吻合的一项**：`d=15` 时 light 和 medium 两档的主导步长都是 `0`（同组、结果不变），跟 NZ33 报告的"2K、4K 同组代价都是 15"直接对上。
+- **矛盾的一项**：`d=3`（NZ33 报告的"顺时针跨组代价"）在两档上对不上——light 在 `d=3` 的主导步长是 `-1`（跨了一组，59.0%），medium 在 `d=3` 的主导步长却是 `0`（没跨组，92.0%），而 NZ33 的表给 2K、4K 填的是同一个数字。
+
+驱动展示结果的确定性机制本身已经确认无误（§4.2 已排除"重播种发生多次"和"弹窗交互影响变换深度"两种解释），"同组"这一项数字有了引擎层解释，"跨组"这一项仍未解释。可能的来源包括 NZ33 数据本身的精确度（本报告没有独立核实过其原始测试数据），或者"跨天气类型触发预报"这类还没有建模进来的变量。
 
 ### 5.2 操作间隔的补充测试
 
-一份社区测试视频记录了"操作间隔与是否保留原结果"的关系（插入 1/4 次操作保留、2/5/8 次不保留等），完整转述见 [社区实测记录](社区实测记录.md) §2.3；因该视频未标注具体档位，无法换算成 §4.2 的精确数字，只作为定性参考。
+一份社区测试视频记录了"操作间隔与是否保留原结果"的关系（插入 1/4 次操作保留、2/5/8 次不保留等），完整转述见 [社区实测记录](社区实测记录.md) §2.3。该视频未标注具体档位，无法换算成 §4.2 的精确数字，只作定性参考。
 
 ## 6. 另见
 
-- [RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md) — 2026-08-25 服务端调整的技术原理，为什么本文描述的机制已经失效。
+- [RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md) — 2026-08-25 服务端调整的技术原理，以及本文描述的机制为什么失效。
 - [README.md](README.md) — 完整的对局生命周期随机数机制报告（播种时机、重播种触发条件、`cardsRandomStream` 全部已知消费点、动作类型与提交流程）。
-- [SpyRing.md](SpyRing.md) — 用同一套随机流机制解释"间谍组织"卡的环形分布规律，方法论上和本文互为印证。
+- [SpyRing.md](SpyRing.md) — 用同一套随机流机制解释"间谍组织"卡的环形分布规律。
+- [ReseedImpact.md](ReseedImpact.md) — 重播种机制如何逐条解释每一个已观察到的现象。
 - [社区实测记录](社区实测记录.md) — 社区操作计数方法论、NZ33 计算器与社区实测数据（非主证据）。
 - [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md) — 该原生字段的真实取值证据。
-- [ReseedImpact.md](ReseedImpact.md) — 重播种机制如何逐条解释每一个已观察到的现象。

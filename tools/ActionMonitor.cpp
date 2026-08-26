@@ -88,11 +88,13 @@ struct TUObjectArray
 static std::mutex g_logMutex;
 static FILE* g_logFile = nullptr;
 
+// Unix epoch 秒（带微秒），不是相对注入时刻的秒表读数——这样才能跟同时抓取的解密网络
+// 报文日志（时间戳同样取自墙钟）按时间戳直接对齐，不需要额外记录"注入时刻的墙钟时间"
+// 再手动换算相对秒表。
 static double NowSeconds()
 {
     using namespace std::chrono;
-    static const auto t0 = steady_clock::now();
-    return duration<double>(steady_clock::now() - t0).count();
+    return duration<double>(system_clock::now().time_since_epoch()).count();
 }
 
 static void LogLine(const char* fmt, ...)

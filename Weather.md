@@ -96,7 +96,7 @@ public void GetChooseSpawnCards(TArray<UBaseCardObject*>& cards, bool& markAsSee
 
 1. 真实抓包已确认，真实对局里 `AMatchControllerV2::bUseTurnSwitchValidation`（native `+0x7A8`）是**开启**的——对局引导数据明文带着 `"validate_turn_switches":true`（详见 [`evidence/bUseTurnSwitchValidation.md`](evidence/bUseTurnSwitchValidation.md)）。这意味着 `cardsRandomStream` 每次创建/确认一个动作都会用 `CurrentActionId` 重播种为 `match_id + CurrentActionId * 19390`；`CurrentActionId` 是本机回放双方合并动作日志的进度游标（README §2.3），与服务端最终确认的、从 1 开始逐一递增的全局动作编号是两套不同的数（详见 [`evidence/action_id-real-capture-sequence.md`](evidence/action_id-real-capture-sequence.md)）。
 2. 天气预报的三连抽（light→medium→heavy）严格按固定顺序发生，候选池大小、每类天气卡数量都是公开可数的静态信息（活跃卡池全程加载，`GetAllActiveStaticCards` 谁都能枚举）。只要知道 `match_id` 和双方到目前为止一共发生过多少个（加权）动作，理论上就能直接算出结果。
-3. 官方已于 2026-08-23 就"秋季锦标赛选手利用特定操作控制预报机制结果"发布说明，确认这一现象属实，技术团队和赛事团队正在调查，并将其定性为游戏机制层面的问题，而非外挂/作弊。截至该说明发布，尚未给出具体修复方案或补偿。
+3. 官方已于 2026-08-23 就"秋季锦标赛选手利用特定操作控制预报机制结果"发布说明，确认这一现象属实，将其定性为游戏机制层面的问题而非外挂/作弊；2026-08-25 官方发布[后续说明](https://www.kards.com/news/forecast-issue-and-fall-2026-tournament-results)，确认已对系统做出调整使其更难被操纵。该调整不需要更新客户端，说明改动在服务端一侧，不影响本节引用的、直接来自 UE5.6 引擎源码的 LCG 算法本身。实测确认调整生效后已无法再按本文公式稳定操纵结果，具体是服务端在哪个环节打断了这种对应关系尚未确认，见 [README.md](README.md) §7 第 6 条。
 
 天气系统的"伪随机"不是比喻——它是以 `match_id` 为种子、按 `CurrentActionId` 重播种的确定性伪随机数序列，理论上全程可预测。这套机制为什么构成一个可被利用的漏洞、玩家具体怎么操作利用它，见 [ReseedImpact.md](ReseedImpact.md) §2。第 4 节从引擎源码给出档位结构和精确的离散步长表；第 5 节把这套纯代码推导跟社区实测数据对照。
 

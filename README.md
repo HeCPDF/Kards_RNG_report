@@ -56,7 +56,7 @@ private void SetRandomStreamWithActionID(int inputActionID) {
 }
 ```
 
-这个函数受 `AMatchControllerV2::bUseTurnSwitchValidation`（native `+0x7A8`）控制。蓝图代码里这个字段只被读取、从未被赋值；原生反汇编里也找不到任何硬编码的赋值指令（`xrefs_to_field` 查询返回零结果）——真正的原因是这个值由服务端按局下发，客户端通过反射系统写入，不是写死在代码里的常量。**真实抓包已经直接确认了下发的值**：对局引导数据（bootstrap）末尾明文带着 `"validate_turn_switches":true`，字段名跟这个原生属性高度对应。也就是说，在真实的 `training`（人机单机）以及对局里，这个重播种分支**是开启的**——每次创建/确认一个动作，`cardsRandomStream` 都会被重新播种。完整证据见 [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)。PvP 天梯对局同样开启该开关（由持有账号的本项目所有者直接核实）；锦标赛等其他赛制是否配置不同仍未覆盖，见 §7。
+这个函数受 `AMatchControllerV2::bUseTurnSwitchValidation`（native `+0x7A8`）控制。蓝图代码里这个字段只被读取、从未被赋值，原生反汇编里也找不到任何硬编码的赋值指令——它的值由服务端按局下发，客户端通过反射系统写入，不是写死在代码里的常量（完整证据见 [evidence/bUseTurnSwitchValidation.md](evidence/bUseTurnSwitchValidation.md)）。真实抓包里，对局引导数据末尾明文带着 `"validate_turn_switches":true`：`training`（人机单机）和 PvP 天梯对局都是开启状态，也就是说每次创建/确认一个动作，`cardsRandomStream` 都会被重新播种。2026-08-25 之后这个字段被服务端整体撤回，重播种机制随之停摆，见 [RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md)。
 
 有两个调用点：
 
@@ -103,7 +103,7 @@ SetRandomStreamWithActionID(receivedAction.action_id);
 | `ActionEndMatch` | — | 对局结束（走 `PUT /matches/v2/<id>`，不是 `/actions`） |
 | `XActionCheat` / `ActionNewDeck` | — | 已知存在，具体触发条件未深入验证 |
 
-服务端确认后回传的动作里，还会附带 `sub_actions`——`Z` 前缀命名（`ZActionChangeKredits`、`ZActionDrawCardFromDeck`、`ZActionDamageCard` 等），是游戏逻辑计算出的连锁效果（战斗伤害、死亡、抽牌、增益），客户端只接收、从不自己构造。两份真实抓包目前都没有捕捉到带 `sub_actions` 的完整确认回包（可能是轮询时机没对上），这部分内容目前只有蓝图反编译依据，未经真实数据交叉验证。
+服务端确认后回传的动作里，还会附带 `sub_actions`——`Z` 前缀命名（`ZActionChangeKredits`、`ZActionDrawCardFromDeck`、`ZActionDamageCard` 等），是游戏逻辑计算出的连锁效果（战斗伤害、死亡、抽牌、增益），客户端只接收、从不自己构造，字段形状只有蓝图反编译依据。
 
 ### 3.2 一个真实回合的完整序列（真实抓包，逐条解密确认）
 
@@ -157,18 +157,17 @@ XActionEndOfTurn       action_id=7
 - 真实对局里 `bUseTurnSwitchValidation` 开启，每次动作都会把它重播种为 `match_id + CurrentActionId*19390`（§2.2）。
 - 服务端最终确认的权威 `action_id` 是双方合并、从 1 开始逐一递增的简单序列；提交前预览所用的种子来自 `CurrentActionId`（本机回放双方合并动作日志的进度游标），与提交 JSON 里的 `Counter3228`（只数己方构造动作）是两个不同的字段（§2.3）。社区按"双方加权操作数"计数的方法论与前者自洽，见 [社区实测记录](社区实测记录.md) §1。
 
-因此：**天气预报、间谍组织、护航攻击等所有依赖 `cardsRandomStream` 的效果，其预览结果从玩家开始操作的那一刻起理论上就是完全确定的，只取决于双方截至当前累计发生过多少个（按社区权重加权的）操作**。这不需要额外假设——是这三点已确认事实的直接推论。
+因此：**天气预报、间谍组织、护航攻击等所有依赖 `cardsRandomStream` 的效果，其预览结果从玩家开始操作的那一刻起理论上就是完全确定的，只取决于双方截至当前累计发生过多少个（按社区权重加权的）操作**。这不需要额外假设，是上面三点已确认事实的直接推论。[evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md) 提供了直接实证：两场真实 PvP 对局（休闲模式）里合计 11 次天气预报，玩家实际看到的展示结果全部跟这套公式算出的候选值吻合，零例外。
 
-这正是社区仅凭对局内观察、用统计归纳法就能摸出规律（[社区实测记录](社区实测记录.md) §2/§3 收录的 NZ33 代价表、环形游走与完整周期），乃至据此设计出"零费用控制天气结果"打法的根本原因。官方已于 2026-08-23 发布《关于秋季锦标赛预报机制的说明》，确认"尝试利用特定操作控制预报机制结果"属实，将其定性为游戏机制层面的问题，而非外挂/作弊（忙活半天结果 1939 说是服务器问题，难蚌）；2026-08-25 官方发布[后续说明](https://www.kards.com/news/forecast-issue-and-fall-2026-tournament-results)，把成因归结为预报代码与部分旧版游戏代码之间一处未被测试覆盖到的意外交互，表示已经对系统做出调整使其更难被操纵、后续还有进一步改进计划，秋季锦标赛成绩维持不变、不追究任何参赛者责任。这次调整不需要更新客户端，说明它改动的是服务端下发/校验的参数或流程，而不是客户端里 §1 这套引擎自带的 LCG 算法本身——那部分是可以直接从 UE5.6 引擎源码读到的公开确定性算法，不受服务端更新影响。社区在调整生效后测试反馈：以前摸出来的这套操作规律（NZ33 代价表、环形游走等）已经不能再稳定复现期望结果。真实对局的直接实测进一步确认：这不只是"经验规律失效"，本文重播种公式本身在调整后也不能再准确预测结果——具体查明的原因是服务端下发的对局数据里，`validate_turn_switches` 字段（对应原生 `bUseTurnSwitchValidation`）被整个撤回了，导致 §2.2 描述的"每个动作重播种"分支不再触发，`cardsRandomStream` 变成从对局开始起连续自由推进，不再是每次都能从 `match_id`+`CurrentActionId` 精确复现的确定性快照。完整技术推导、真实抓包对照见 [RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md)。§1-§6 的静态推导和历史抓包证据本身没有被推翻，继续作为这套机制曾经可被利用的完整技术记录保留。
+这正是社区仅凭对局内观察、用统计归纳法就能摸出规律（[社区实测记录](社区实测记录.md) §2/§3 收录的 NZ33 代价表、环形游走与完整周期），乃至据此设计出"零费用控制天气结果"打法的根本原因。
 
-**已证明**（Weather.md §4.2）：NZ33"2K 和 4K 代价完全相同"这条经验数据，如果套用"三次连续调用的原始返回下标固定对应 light=第1次/medium=第2次变换深度"这个最直接的模型，用已经字节级确认的 LCG 公式代入计算，数学上不可能产生（`A^1 mod 2^32 ≠ A^2 mod 2^32`，无巧合可能）——这是证明，不是推测。"结果是确定性的、原则上可预测"这一层，除了 §1-§3 的重播种公式+本地计数器机制的静态推导外，现在还有 [evidence/live-match-forecast-validation.md](evidence/live-match-forecast-validation.md) 的直接实证：两场真实 PvP 对局（休闲模式）里合计 11 次天气预报，玩家实际看到的展示结果全部跟这套确认公式算出的候选值吻合，零例外。
+官方已于 2026-08-23 发布《关于秋季锦标赛预报机制的说明》，确认"尝试利用特定操作控制预报机制结果"属实，将其定性为游戏机制层面的问题，而非外挂/作弊（忙活半天结果 1939 说是服务器问题，难蚌）；2026-08-25 发布[后续说明](https://www.kards.com/news/forecast-issue-and-fall-2026-tournament-results)，表示已经对系统做出调整使其更难被操纵、不需要更新客户端，秋季锦标赛成绩维持不变、不追究任何参赛者责任。调整生效后，社区总结的这套操作规律（NZ33 代价表、环形游走等）已经无法稳定复现，本文的重播种公式本身也不能再准确预测结果——原因是服务端撤回了 `validate_turn_switches` 字段，§2.2 描述的"每个动作重播种"分支从此不再触发，`cardsRandomStream` 变成从对局开始起连续自由推进，不再是每次都能从 `match_id`+`CurrentActionId` 精确复现的快照。完整技术推导和真实抓包对照见 [RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md)。§1-§6 的静态推导和历史抓包证据本身没有被推翻，作为这套机制曾经可被利用的完整技术记录保留。
 
 ## 7. 尚待确认的开放问题（每条都已定性到静态分析能解决/不能解决的边界）
 
 1. **数组下标↔候选变体编号的映射**：已解决（Weather.md §4.2）——`GetChooseSpawnCards` 每个档位的桶里只装 3 个同档位变体，资产名恰好是"无后缀/加2/加3"，字典序排序天然给出下标 0/1/2 对应变体 1/2/3。用这套映射加已确认的 LCG 常数核对社区 NZ33 代价表：`d=15`（同小组）在 light、medium 两档都吻合；`d=3`（顺时针跨组）两档算出的方向相反，跟经验数据矛盾——完整推导见 Weather.md §4.2，这一条矛盾尚未定位到成因。
 2. **`_forecastOptions` 何时被清空**：已解决（Weather.md §2.2）——它不需要被清空，因为每次触发预报都是全新创建的卡实例，`_forecastOptions` 天然是空的，反编译到 `selectCardToDraw`/`GetChooseSpawnCards` 的调用链已直接证实。
-3. **`bUseTurnSwitchValidation` 在不同赛制下的取值**：`training` 和 PvP 天梯均已确认为 `true`（调整前）。这个字段实际来源是登录 `/session` 接口下发、由客户端在每局对局请求里原样带上，理论上不会按赛制单独配置——详见 [RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md) §2。
-4. **2026-08-25 服务端调整具体改了什么**：已查明，见 [RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md)——服务端不再下发 `validate_turn_switches` 字段，`bUseTurnSwitchValidation` 停在反射默认值上，§2.2 的重播种分支不再触发，`cardsRandomStream` 从每动作重置变成连续自由推进。客户端引擎自带的 LCG 算法本身没有被改变（调整不需要更新客户端，这一点已直接验证）。仍未确认的是这个反射默认值具体是不是 `false`，以及"连续推进"模型能否被精确验证到数值级别（需要完整重建对局内全部 `cardsRandomStream` 消费点的调用计数），详见该文档 §5。
+3. **`bUseTurnSwitchValidation` 的完整历史与 2026-08-25 调整的具体原理**：`training` 和 PvP 天梯在调整前均已确认为 `true`；这个字段来自登录 `/session` 接口下发、由客户端在每局对局请求里原样带上，理论上不分赛制。调整后被整体撤回，导致重播种机制停摆——完整技术推导、未决细节（反射默认值是否确实是 `false`、"连续推进"模型的精确验证）见 [RandomnessHotfixMechanism.md](RandomnessHotfixMechanism.md)。
 
 ## 8. 另见
 
